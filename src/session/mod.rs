@@ -25,6 +25,7 @@ pub enum SessionError {
     Config(ConfigError),
     Io(io::Error),
     Ipc(String),
+    NestedSession,
 }
 
 impl std::fmt::Display for SessionError {
@@ -33,6 +34,10 @@ impl std::fmt::Display for SessionError {
             SessionError::Config(e) => write!(f, "{e}"),
             SessionError::Io(e) => write!(f, "I/O error: {e}"),
             SessionError::Ipc(msg) => write!(f, "IPC error: {msg}"),
+            SessionError::NestedSession => write!(
+                f,
+                "cannot start a nested thud session inside an active thud session ($THUD_ACTIVE is set)"
+            ),
         }
     }
 }
@@ -60,6 +65,13 @@ impl Session {
     /// spawns the child shell inside a PTY, binds the Unix domain socket for IPC,
     /// runs the non-blocking compositor loop, and restores terminal state on exit.
     pub fn run(config: Config) -> Result<i32, SessionError> {
+        if std::env::var("THUD_ACTIVE")
+            .ok()
+            .is_some_and(|v| !v.is_empty() && v != "0")
+        {
+            return Err(SessionError::NestedSession);
+        }
+
         let mut host = OsHostTerminal::enter()?;
         let initial_host_size = host.size()?;
         let now = Instant::now();

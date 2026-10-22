@@ -41,7 +41,9 @@ impl OuterTerminalSimulator {
             unsafe {
                 std::env::set_var("TERM", "xterm-256color");
                 // Isolate E2E tests from the developer's personal ~/.config/thud/config.toml
+                // and allow running `cargo test` from inside a live `thud` session.
                 std::env::set_var("THUD_CONFIG", "/tmp/thud-e2e-nonexistent-default.toml");
+                std::env::remove_var("THUD_ACTIVE");
             }
             let c_bin = CString::new(bin_path).unwrap();
             let mut c_args: Vec<CString> = Vec::with_capacity(args.len() + 1);
