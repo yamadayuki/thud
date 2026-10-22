@@ -1,85 +1,39 @@
 use crate::ui::{Buffer, CellStyle, Color, CursorState, Rect};
 use std::num::NonZeroU16;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum MouseEventKind {
-    WheelUp,
-    WheelDown,
-    Other,
+/// Child terminal modes that change what the host terminal must send as input.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct TerminalModes {
+    pub bracketed_paste: bool,
+    pub application_cursor: bool,
+    pub application_keypad: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct ParsedMouseEvent {
-    pub kind: MouseEventKind,
-    pub btn: u16,
-    pub col: u16,
-    pub row: u16,
-    pub release: bool,
-    pub is_sgr: bool,
-    pub len: usize,
-}
-
-/// Parses an SGR (`\x1b[<btn;col;rowM`/`m`) or X10 (`\x1b[M<b1><b2><b3>`) mouse sequence
-/// from the start of `bytes`.
-pub(crate) fn parse_mouse_event(bytes: &[u8]) -> Option<ParsedMouseEvent> {
-    if bytes.starts_with(b"\x1b[<") {
-        let mut end = 3;
-        while end < bytes.len() && (bytes[end].is_ascii_digit() || bytes[end] == b';') {
-            end += 1;
-        }
-        if end < bytes.len() && (bytes[end] == b'M' || bytes[end] == b'm') {
-            let release = bytes[end] == b'm';
-            let body = std::str::from_utf8(&bytes[3..end]).ok()?;
-            let mut parts = body.split(';');
-            let btn: u16 = parts.next()?.parse().ok()?;
-            let col: u16 = parts.next()?.parse().ok()?;
-            let row: u16 = parts.next()?.parse().ok()?;
-            if parts.next().is_some() {
-                return None;
-            }
-            let kind = if !release && (btn & 64) != 0 {
-                match btn & 3 {
-                    0 => MouseEventKind::WheelUp,
-                    1 => MouseEventKind::WheelDown,
-                    _ => MouseEventKind::Other,
-                }
+impl TerminalModes {
+    /// Appends the escape sequences that switch a host terminal from `self` to `next`.
+    pub fn write_transition(self, next: Self, out: &mut Vec<u8>) {
+        if self.bracketed_paste != next.bracketed_paste {
+            out.extend_from_slice(if next.bracketed_paste {
+                b"\x1b[?2004h"
             } else {
-                MouseEventKind::Other
-            };
-            return Some(ParsedMouseEvent {
-                kind,
-                btn,
-                col,
-                row,
-                release,
-                is_sgr: true,
-                len: end + 1,
+                b"\x1b[?2004l"
             });
         }
-    } else if bytes.starts_with(b"\x1b[M") && bytes.len() >= 6 {
-        let btn = u16::from(bytes[3].saturating_sub(32));
-        let col = u16::from(bytes[4].saturating_sub(32));
-        let row = u16::from(bytes[5].saturating_sub(32));
-        let kind = if (btn & 64) != 0 {
-            match btn & 3 {
-                0 => MouseEventKind::WheelUp,
-                1 => MouseEventKind::WheelDown,
-                _ => MouseEventKind::Other,
-            }
-        } else {
-            MouseEventKind::Other
-        };
-        return Some(ParsedMouseEvent {
-            kind,
-            btn,
-            col,
-            row,
-            release: false,
-            is_sgr: false,
-            len: 6,
-        });
+        if self.application_cursor != next.application_cursor {
+            out.extend_from_slice(if next.application_cursor {
+                b"\x1b[?1h"
+            } else {
+                b"\x1b[?1l"
+            });
+        }
+        if self.application_keypad != next.application_keypad {
+            out.extend_from_slice(if next.application_keypad {
+                b"\x1b="
+            } else {
+                b"\x1b>"
+            });
+        }
     }
-    None
 }
 
 /// Internal adapter wrapping `vt100::Parser` (dual Primary/Alternate screen state machine),
@@ -106,6 +60,16 @@ impl VtScreenAdapter {
 
     pub fn is_alternate_screen(&self) -> bool {
         self.vt.screen().alternate_screen()
+    }
+
+    /// Returns the input-affecting modes the child process has enabled.
+    pub fn modes(&self) -> TerminalModes {
+        let screen = self.vt.screen();
+        TerminalModes {
+            bracketed_paste: screen.bracketed_paste(),
+            application_cursor: screen.application_cursor(),
+            application_keypad: screen.application_keypad(),
+        }
     }
 
     /// Returns true if the child process inside the PTY has enabled mouse tracking.

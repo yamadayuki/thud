@@ -63,18 +63,18 @@ impl Config {
             "\n# Hotkey to toggle Zen Mode (temporarily hides all HUD elements and expands the PTY):\n",
         );
         if let Some(key) = &self.zen_toggle_key {
-            let _ = writeln!(out, "zen_toggle_key = {}", toml_quote(key));
+            let _ = writeln!(out, "zen_toggle_key = {}", toml_quote(&key.to_string()));
         } else {
-            out.push_str("# zen_toggle_key = \"ctrl-\\\\\"\n");
+            out.push_str("zen_toggle_key = \"\"\n");
         }
 
         out.push_str(
             "\n# Hotkey to manually reload config.toml (note: saving config.toml also auto-reloads live):\n",
         );
         if let Some(key) = &self.reload_key {
-            let _ = writeln!(out, "reload_key = {}", toml_quote(key));
+            let _ = writeln!(out, "reload_key = {}", toml_quote(&key.to_string()));
         } else {
-            out.push_str("# reload_key = \"ctrl-]\"\n");
+            out.push_str("reload_key = \"\"\n");
         }
 
         out.push_str(

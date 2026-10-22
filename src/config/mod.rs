@@ -399,10 +399,17 @@ pub struct Config {
     pub shell: Option<String>,
     #[serde(default)]
     pub ipc_socket: Option<PathBuf>,
-    #[serde(default = "default_zen_toggle_key")]
-    pub zen_toggle_key: Option<String>,
-    #[serde(default = "default_reload_key")]
-    pub reload_key: Option<String>,
+    /// `None` (written as `""`) disables the hotkey.
+    #[serde(
+        default = "default_zen_toggle_key",
+        deserialize_with = "deserialize_optional_hotkey"
+    )]
+    pub zen_toggle_key: Option<Hotkey>,
+    #[serde(
+        default = "default_reload_key",
+        deserialize_with = "deserialize_optional_hotkey"
+    )]
+    pub reload_key: Option<Hotkey>,
     #[serde(default = "default_scrollback_lines")]
     pub scrollback_lines: usize,
     #[serde(default)]
@@ -419,12 +426,79 @@ fn default_theme() -> ThemeConfig {
     ThemeConfig::from_preset(ThemePreset::TokyoNight)
 }
 
-fn default_zen_toggle_key() -> Option<String> {
-    Some("ctrl-\\".to_string())
+fn default_zen_toggle_key() -> Option<Hotkey> {
+    Some(Hotkey(0x1c))
 }
 
-fn default_reload_key() -> Option<String> {
-    Some("ctrl-]".to_string())
+fn default_reload_key() -> Option<Hotkey> {
+    Some(Hotkey(0x1d))
+}
+
+/// A HUD hotkey: a single control byte written as `"ctrl-<key>"` in the config
+/// (`ctrl-a`..`ctrl-z`, `ctrl-\`, `ctrl-]`, `ctrl-^`, `ctrl-_`, `ctrl-space`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Hotkey(pub u8);
+
+impl Hotkey {
+    pub fn parse(spec: &str) -> Result<Self, String> {
+        let s = spec.trim().to_ascii_lowercase();
+        let byte = match s.strip_prefix("ctrl-") {
+            Some("\\") => Some(0x1c),
+            Some("]") => Some(0x1d),
+            Some("^") => Some(0x1e),
+            Some("_") => Some(0x1f),
+            Some("space" | "@") => Some(0x00),
+            Some(c) if c.len() == 1 && c.as_bytes()[0].is_ascii_lowercase() => {
+                Some(c.as_bytes()[0] - b'a' + 1)
+            }
+            _ => None,
+        };
+        byte.map(Hotkey).ok_or_else(|| {
+            format!(
+                "invalid hotkey '{spec}' (expected ctrl-a..ctrl-z, ctrl-\\, ctrl-], ctrl-^, ctrl-_, or ctrl-space)"
+            )
+        })
+    }
+}
+
+impl std::fmt::Display for Hotkey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.0 {
+            0x00 => write!(f, "ctrl-space"),
+            0x1c => write!(f, "ctrl-\\"),
+            0x1d => write!(f, "ctrl-]"),
+            0x1e => write!(f, "ctrl-^"),
+            0x1f => write!(f, "ctrl-_"),
+            b @ 1..=26 => write!(f, "ctrl-{}", char::from(b'a' + b - 1)),
+            b => write!(f, "0x{b:02x}"),
+        }
+    }
+}
+
+/// Accepts `""` as a disabled hotkey and rejects any other unknown key name.
+fn deserialize_optional_hotkey<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<Hotkey>, D::Error> {
+    let spec = String::deserialize(deserializer)?;
+    if spec.trim().is_empty() {
+        return Ok(None);
+    }
+    Hotkey::parse(&spec)
+        .map(Some)
+        .map_err(serde::de::Error::custom)
+}
+
+impl Serialize for Hotkey {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_str(self)
+    }
+}
+
+impl<'de> Deserialize<'de> for Hotkey {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let spec = String::deserialize(deserializer)?;
+        Hotkey::parse(&spec).map_err(serde::de::Error::custom)
+    }
 }
 
 fn default_scrollback_lines() -> usize {
@@ -563,29 +637,6 @@ impl Config {
         Ok(path)
     }
 
-    /// Parse a hotkey string like `"ctrl-\\"` (`0x1c`), `"ctrl-]"` (`0x1d`), or `"ctrl-g"` (`0x07`)
-    /// into its single raw control byte.
-    pub fn parse_hotkey_byte(spec: Option<&str>) -> Option<u8> {
-        let s = spec?.trim().to_ascii_lowercase();
-        let rest = s.strip_prefix("ctrl-")?;
-        match rest {
-            "\\" => Some(0x1c),
-            "]" => Some(0x1d),
-            "^" => Some(0x1e),
-            "_" => Some(0x1f),
-            "space" | "@" => Some(0x00),
-            c if c.len() == 1 => {
-                let b = c.as_bytes()[0];
-                if b.is_ascii_lowercase() {
-                    Some(b - b'a' + 1)
-                } else {
-                    None
-                }
-            }
-            _ => None,
-        }
-    }
-
     /// Reserved rows (`top` or `bottom`) for the docked status bar.
     pub fn reserved_status_rows(&self) -> u16 {
         if self.status_bar.enabled {
@@ -659,10 +710,7 @@ mod tests {
         let cfg = Config::from_toml(toml_input).expect("valid TOML");
         assert_eq!(cfg.theme, ThemeConfig::from_preset(ThemePreset::TokyoNight));
         assert_eq!(cfg.shell.as_deref(), Some("/bin/zsh"));
-        assert_eq!(
-            Config::parse_hotkey_byte(cfg.zen_toggle_key.as_deref()),
-            Some(0x07)
-        );
+        assert_eq!(cfg.zen_toggle_key, Some(Hotkey(0x07)));
         assert_eq!(cfg.status_bar.left.len(), 3);
         assert_eq!(
             cfg.status_bar.left[0].style.bg,
