@@ -297,7 +297,7 @@ impl TelemetryStore {
         in_status_bar: bool,
     ) -> CellStyle {
         let palette: ThemePalette = theme.palette();
-        let (default_fg, default_bg) = if in_status_bar && !theme.is_unthemed_default() {
+        let (default_fg, default_bg) = if in_status_bar {
             match &spec.kind {
                 WidgetKind::Cwd => palette.cwd_accent,
                 WidgetKind::GitBranch => palette.git_accent,
@@ -335,13 +335,7 @@ impl TelemetryStore {
         let pill = spec.style.pill.unwrap_or(false);
         let prefix = spec.style.prefix.as_deref();
         let suffix = spec.style.suffix.as_deref();
-        let track_fg = spec.style.track_fg.or_else(|| {
-            if !theme.is_unthemed_default() {
-                Some(theme.palette().track_fg)
-            } else {
-                None
-            }
-        });
+        let track_fg = spec.style.track_fg.or(Some(theme.palette().track_fg));
 
         match &spec.kind {
             WidgetKind::Sparkline {

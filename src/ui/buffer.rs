@@ -314,6 +314,12 @@ impl Buffer {
         }
         match style.fg {
             Color::Default | Color::Rgba(_, _, _, 0) => {}
+            Color::Ansi(idx) if idx < 8 => {
+                let _ = write!(out, ";{}", 30 + idx);
+            }
+            Color::Ansi(idx) if idx < 16 => {
+                let _ = write!(out, ";{}", 90 + (idx - 8));
+            }
             Color::Ansi(idx) => {
                 let _ = write!(out, ";38;5;{idx}");
             }
@@ -323,6 +329,12 @@ impl Buffer {
         }
         match style.bg {
             Color::Default | Color::Rgba(_, _, _, 0) => {}
+            Color::Ansi(idx) if idx < 8 => {
+                let _ = write!(out, ";{}", 40 + idx);
+            }
+            Color::Ansi(idx) if idx < 16 => {
+                let _ = write!(out, ";{}", 100 + (idx - 8));
+            }
             Color::Ansi(idx) => {
                 let _ = write!(out, ";48;5;{idx}");
             }

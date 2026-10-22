@@ -78,7 +78,7 @@ Set `theme` at the top of `config.toml` to one of the 7 built-in presets:
 - `"cyberpunk"`
 - `"nord"`
 - `"gruvbox"`
-- `"default"` *(minimal grayscale ANSI)*
+- `"default"` *(respects the 16 ANSI colors and background/foreground configured in your terminal)*
 
 ```toml
 theme = "tokyo_night"

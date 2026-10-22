@@ -292,17 +292,17 @@ impl ThemePreset {
     pub const fn palette(self) -> ThemePalette {
         match self {
             ThemePreset::Default => ThemePalette {
-                bar_fg: Color::Ansi(255),
+                bar_fg: Color::Default,
                 bar_bg: Color::Default,
-                overlay_fg: Color::Ansi(231),
-                overlay_bg: Color::Ansi(238),
-                border_fg: Color::Ansi(245),
-                title_fg: Color::Ansi(231),
-                track_fg: Color::Ansi(242),
-                cwd_accent: (Color::Ansi(255), Color::Ansi(236)),
-                git_accent: (Color::Ansi(255), Color::Ansi(236)),
-                cmd_accent: (Color::Ansi(255), Color::Ansi(236)),
-                metric_accent: (Color::Ansi(255), Color::Ansi(236)),
+                overlay_fg: Color::Default,
+                overlay_bg: Color::Default,
+                border_fg: Color::Ansi(4),
+                title_fg: Color::Ansi(6),
+                track_fg: Color::Ansi(8),
+                cwd_accent: (Color::Ansi(0), Color::Ansi(4)),
+                git_accent: (Color::Ansi(0), Color::Ansi(2)),
+                cmd_accent: (Color::Ansi(0), Color::Ansi(3)),
+                metric_accent: (Color::Ansi(6), Color::Default),
             },
             ThemePreset::TokyoNight => ThemePalette {
                 bar_fg: Color::Rgb(192, 202, 245),
@@ -549,10 +549,6 @@ impl ThemeConfig {
             || self.cmd_bg.is_some()
             || self.metric_fg.is_some()
             || self.metric_bg.is_some()
-    }
-
-    pub const fn is_unthemed_default(&self) -> bool {
-        matches!(self.preset, ThemePreset::Default) && !self.has_overrides()
     }
 
     /// Resolves the final `ThemePalette` by applying any user overrides on top of `self.preset.palette()`.
