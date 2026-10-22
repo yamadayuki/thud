@@ -69,6 +69,10 @@ fn try_main() -> Result<(), SessionError> {
             };
             Session::send_ipc_message(socket, &IpcMessage::UpsertOverlay { overlay })
         }
+        Some("quit" | "exit") => {
+            let (_, socket) = parse_ipc_flags(&args[1..])?;
+            Session::send_ipc_message(socket, &IpcMessage::Quit)
+        }
         Some("print-default-config") => {
             let default_cfg = Config::default();
             let serialized =
@@ -166,6 +170,7 @@ USAGE:
   cth set <key> <value> [--ttl-ms <ms>]           Update an IPC status slot in the active session
   cth clear <key>                                 Clear an IPC status slot
   cth toast <message> [--ttl-ms <ms>]             Show a floating toast notification overlay
+  cth quit                                        Gracefully exit the active cth session
   cth print-default-config                        Print the default TOML configuration"
     );
 }

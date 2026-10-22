@@ -169,9 +169,17 @@ impl Session {
             }
 
             // 3. Drain non-blocking IPC socket messages
+            let mut should_quit = false;
             for ipc_msg in ipc_server.drain_messages() {
+                if ipc_msg == IpcMessage::Quit {
+                    should_quit = true;
+                    break;
+                }
                 let tx = compositor.step(Event::Ipc(ipc_msg), loop_now);
                 Self::apply_os_transition(&tx, &mut host, &mut pty, &cmd_tx)?;
+            }
+            if should_quit {
+                break 0;
             }
 
             // 4. Drain completed async periodic command outputs

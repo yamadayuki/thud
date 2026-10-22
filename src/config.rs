@@ -306,6 +306,8 @@ pub enum IpcMessage {
     UpsertOverlay { overlay: OverlayConfig },
     /// Remove a floating overlay by ID.
     RemoveOverlay { id: String },
+    /// Gracefully terminate the active `cth` session.
+    Quit,
 }
 
 #[derive(Debug, PartialEq, Eq)]

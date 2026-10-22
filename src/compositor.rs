@@ -351,6 +351,7 @@ impl Compositor {
                     IpcMessage::RemoveOverlay { id } => {
                         self.dynamic_overlays.remove(&id);
                     }
+                    IpcMessage::Quit => {}
                 }
             }
         }
