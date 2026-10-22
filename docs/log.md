@@ -1,4 +1,5 @@
 ## 2026-10-22
+* **Update**: Updated concept `decisions/adr-001-design-it-twice-compositor-seam.md`.
 * **Update**: Updated concept `requirements/core-hud-capabilities.md`.
 * **Update**: Updated concept `architecture/compositor-module.md`.
 * **Update**: Linked `architecture/compositor-module.md` to `requirements/core-hud-capabilities.md` (satisfies core terminal HUD, full-screen overlay, and widget requirements).

@@ -540,7 +540,7 @@ impl Compositor {
                                 reply.extend_from_slice(b"\x1b[?0u");
                             }
                             (b">" | b">0", b'q') => {
-                                reply.extend_from_slice(b"\x1bP>|cth(0.1.0)\x1b\\");
+                                reply.extend_from_slice(b"\x1bP>|thud(0.1.0)\x1b\\");
                             }
                             _ => {}
                         }
@@ -1009,7 +1009,7 @@ impl Compositor {
     fn render_toast_stack(&self, grid: &mut FrameGrid, child_size: TermSize) {
         let mut current_row = i32::from(child_size.rows) - 1;
 
-        // 1. Render any active unreferenced progress metrics (`cth progress <key> <pct>`)
+        // 1. Render any active unreferenced progress metrics (`thud progress <key> <pct>`)
         for (key, series) in &self.metrics {
             if current_row < 0 {
                 break;
@@ -1556,7 +1556,7 @@ mod tests {
         );
         let reply = String::from_utf8_lossy(&tx.child_pty_input);
         assert!(reply.contains("\x1b[?0u"));
-        assert!(reply.contains("\x1bP>|cth(0.1.0)\x1b\\"));
+        assert!(reply.contains("\x1bP>|thud(0.1.0)\x1b\\"));
         assert!(reply.contains("\x1b]11;rgb:1c1c/1c1c/1c1c\x1b\\"));
         assert!(reply.contains("\x1b[?62;22c"));
         assert!(reply.contains("\x1b[1;6R"));

@@ -3,13 +3,13 @@ type: Decision
 title: "ADR-001: Design It Twice Evaluation for Compositor and Session Seams"
 description: Comparison of four candidate module interfaces and selection of a Sans-I/O Compositor core paired with a Session runner.
 tags: [adr, design-it-twice, codebase-design, seam, depth]
-generated: { by: agent/cli, at: "2026-10-22T05:17:29Z" }
+generated: { by: antigravity/gemini-4, at: "2026-10-22T09:09:24Z" }
 status: stable
 ---
 
 ## Context
 
-We evaluated four radically different designs using the `codebase-design` "Design It Twice" methodology to determine where to place the seams for `cth`.
+We evaluated four radically different designs using the `codebase-design` "Design It Twice" methodology to determine where to place the seams for `thud`.
 
 ## Candidate Designs Evaluated
 

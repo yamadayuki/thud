@@ -1,8 +1,8 @@
-# AGENTS.md - DMAA Protocol v0.1 - Instructions for AI Agents in `cth`
+# AGENTS.md - DMAA Protocol v0.1 - Instructions for AI Agents in `thud`
 
 > Powered by [OKF Agent Memory](https://github.com/okf-memory/okf-agent-memory) -- Open Knowledge Format (OKF) v0.2 persistent project memory for AI agents.
 
-Welcome to the **cth** repository. Define domain-specific behavioral rules in Agent Action Grammar (AAG) alongside the persistent memory protocol:
+Welcome to the **thud** (Terminal Heads Up Display) repository. Define domain-specific behavioral rules in Agent Action Grammar (AAG) alongside the persistent memory protocol:
 
 ## 0. Project & Domain Codex (Customize for your domain: Research, Enterprise, Engineering, Creative)
 - TONE: style == direct_concise, zero_pleasantries

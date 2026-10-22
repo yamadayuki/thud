@@ -4,9 +4,9 @@ use std::io;
 use std::time::{Duration, Instant};
 
 /// An automated "Outer Terminal Emulator" harness for AI Agents and CI.
-/// Spawns the real `cth` binary inside a pseudo-terminal (`forkpty`), feeds all ANSI output
-/// from `cth` into a host-side `vt100::Parser` (simulating Ghostty/WezTerm/Alacritty),
-/// sends real keystrokes to `cth`'s stdin, and inspects the resulting 2D screen grid.
+/// Spawns the real `thud` binary inside a pseudo-terminal (`forkpty`), feeds all ANSI output
+/// from `thud` into a host-side `vt100::Parser` (simulating Ghostty/WezTerm/Alacritty),
+/// sends real keystrokes to `thud`'s stdin, and inspects the resulting 2D screen grid.
 struct OuterTerminalSimulator {
     master_fd: c_int,
     child_pid: libc::pid_t,
@@ -15,8 +15,8 @@ struct OuterTerminalSimulator {
 }
 
 impl OuterTerminalSimulator {
-    fn spawn_cth(cols: u16, rows: u16, args: &[&str]) -> io::Result<Self> {
-        let bin_path = env!("CARGO_BIN_EXE_cth");
+    fn spawn_thud(cols: u16, rows: u16, args: &[&str]) -> io::Result<Self> {
+        let bin_path = env!("CARGO_BIN_EXE_thud");
         let mut master_fd: c_int = -1;
         let mut ws = winsize {
             ws_row: rows,
@@ -40,8 +40,8 @@ impl OuterTerminalSimulator {
         if pid == 0 {
             unsafe {
                 std::env::set_var("TERM", "xterm-256color");
-                // Isolate E2E tests from the developer's personal ~/.config/cth/config.toml
-                std::env::set_var("CTH_CONFIG", "/tmp/cth-e2e-nonexistent-default.toml");
+                // Isolate E2E tests from the developer's personal ~/.config/thud/config.toml
+                std::env::set_var("THUD_CONFIG", "/tmp/thud-e2e-nonexistent-default.toml");
             }
             let c_bin = CString::new(bin_path).unwrap();
             let mut c_args: Vec<CString> = Vec::with_capacity(args.len() + 1);
@@ -198,7 +198,7 @@ impl Drop for OuterTerminalSimulator {
 
 #[test]
 fn e2e_outer_pty_interactive_input_status_bar_ipc_and_clean_exit() {
-    let mut term = OuterTerminalSimulator::spawn_cth(80, 24, &["--shell", "/bin/sh"]).unwrap();
+    let mut term = OuterTerminalSimulator::spawn_thud(80, 24, &["--shell", "/bin/sh"]).unwrap();
 
     // 1. Wait for status bar (row 23) and top-right clock (row 0) to render
     assert!(
@@ -221,8 +221,8 @@ fn e2e_outer_pty_interactive_input_status_bar_ipc_and_clean_exit() {
         "expected git branch on bottom status bar row 23, got: {bottom_row:?}"
     );
 
-    // 2. Send real interactive keystrokes through outer PTY -> cth STDIN -> child shell
-    let bin_path = env!("CARGO_BIN_EXE_cth");
+    // 2. Send real interactive keystrokes through outer PTY -> thud STDIN -> child shell
+    let bin_path = env!("CARGO_BIN_EXE_thud");
     let cmd = format!("echo E2E_TYPING_WORKS && {bin_path} set status LIVE_IPC_OK\r");
     term.send_keys(cmd.as_bytes()).unwrap();
 

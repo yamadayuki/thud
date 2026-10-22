@@ -1,7 +1,8 @@
 [package]
-name = "cth"
+name = "thud"
 version = "0.1.0"
 edition = "2024"
+description = "Terminal Heads Up Display - terminal-emulator-agnostic and shell-agnostic HUD compositor"
 
 [dependencies]
 chrono = "0.4"

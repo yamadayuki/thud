@@ -1,9 +1,9 @@
-use cth::{Config, IpcMessage, Session, SessionError, ToastLevel};
 use std::path::PathBuf;
+use thud::{Config, IpcMessage, Session, SessionError, ToastLevel};
 
 fn main() {
     if let Err(err) = try_main() {
-        eprintln!("cth error: {err}");
+        eprintln!("thud error: {err}");
         std::process::exit(1);
     }
 }
@@ -17,10 +17,10 @@ fn try_main() -> Result<(), SessionError> {
             std::process::exit(code);
         }
         Some("set") => {
-            // Usage: cth set <key> <value> [--ttl-ms <ms>] [--socket <path>]
+            // Usage: thud set <key> <value> [--ttl-ms <ms>] [--socket <path>]
             if args.len() < 3 {
                 return Err(SessionError::Ipc(
-                    "usage: cth set <key> <value> [--ttl-ms <ms>] [--socket <path>]".to_string(),
+                    "usage: thud set <key> <value> [--ttl-ms <ms>] [--socket <path>]".to_string(),
                 ));
             }
             let key = args[1].clone();
@@ -38,7 +38,7 @@ fn try_main() -> Result<(), SessionError> {
         Some("clear") => {
             if args.len() < 2 {
                 return Err(SessionError::Ipc(
-                    "usage: cth clear <key> [--socket <path>]".to_string(),
+                    "usage: thud clear <key> [--socket <path>]".to_string(),
                 ));
             }
             let key = args[1].clone();
@@ -46,10 +46,10 @@ fn try_main() -> Result<(), SessionError> {
             Session::send_ipc_message(flags.socket, &IpcMessage::ClearSlot { key })
         }
         Some("progress" | "metric") => {
-            // Usage: cth progress <key> <0..100|done> [--label <text>] [--ttl-ms <ms>] [--socket <path>]
+            // Usage: thud progress <key> <0..100|done> [--label <text>] [--ttl-ms <ms>] [--socket <path>]
             if args.len() < 3 {
                 return Err(SessionError::Ipc(
-                    "usage: cth progress <key> <0..100|done> [--label <text>] [--ttl-ms <ms>]"
+                    "usage: thud progress <key> <0..100|done> [--label <text>] [--ttl-ms <ms>]"
                         .to_string(),
                 ));
             }
@@ -72,10 +72,10 @@ fn try_main() -> Result<(), SessionError> {
             )
         }
         Some("toast") => {
-            // Usage: cth toast <message> [--level info|success|warn|error] [--ttl-ms <ms>] [--socket <path>]
+            // Usage: thud toast <message> [--level info|success|warn|error] [--ttl-ms <ms>] [--socket <path>]
             if args.len() < 2 {
                 return Err(SessionError::Ipc(
-                    "usage: cth toast <message> [--level info|success|warn|error] [--ttl-ms <ms>]"
+                    "usage: thud toast <message> [--level info|success|warn|error] [--ttl-ms <ms>]"
                         .to_string(),
                 ));
             }
@@ -117,7 +117,7 @@ fn try_main() -> Result<(), SessionError> {
             std::process::exit(code);
         }
         Some(other) => Err(SessionError::Ipc(format!(
-            "unknown subcommand '{other}'. Run `cth --help` for usage."
+            "unknown subcommand '{other}'. Run `thud --help` for usage."
         ))),
     }
 }
@@ -244,16 +244,16 @@ fn parse_init_config_flags(args: &[String]) -> (Option<PathBuf>, bool) {
 fn print_help() {
     println!(
         "\
-cth - Terminal-emulator-agnostic & shell-agnostic HUD compositor
+thud - Terminal Heads Up Display (terminal-emulator-agnostic & shell-agnostic HUD compositor)
 
 USAGE:
-  cth [run] [--config <path>] [--shell <shell>]             Start interactive terminal HUD session
-  cth init-config [--output <path>] [--force]               Write annotated config file (~/.config/cth/config.toml)
-  cth print-default-config                                  Print annotated default TOML configuration
-  cth set <key> <value> [--ttl-ms <ms>]                     Update an IPC status slot
-  cth clear <key>                                           Clear an IPC status slot or metric
-  cth progress <key> <0..100|done> [--label <txt>]          Push progress/metric for gauge or sparkline widgets
-  cth toast <msg> [--level info|success|warn|error]         Enqueue a stacked toast notification overlay
-  cth quit                                                  Gracefully exit the active cth session"
+  thud [run] [--config <path>] [--shell <shell>]             Start interactive terminal HUD session
+  thud init-config [--output <path>] [--force]               Write annotated config file (~/.config/thud/config.toml)
+  thud print-default-config                                  Print annotated default TOML configuration
+  thud set <key> <value> [--ttl-ms <ms>]                     Update an IPC status slot
+  thud clear <key>                                           Clear an IPC status slot or metric
+  thud progress <key> <0..100|done> [--label <txt>]          Push progress/metric for gauge or sparkline widgets
+  thud toast <msg> [--level info|success|warn|error]         Enqueue a stacked toast notification overlay
+  thud quit                                                  Gracefully exit the active thud session"
     );
 }

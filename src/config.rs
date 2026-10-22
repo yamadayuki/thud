@@ -339,7 +339,7 @@ fn default_overlay_bg() -> u8 {
     238
 }
 
-/// Top-level declarative configuration for a `cth` session.
+/// Top-level declarative configuration for a `thud` session.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Config {
     #[serde(default)]
@@ -458,7 +458,7 @@ pub enum IpcMessage {
     UpsertOverlay { overlay: OverlayConfig },
     /// Remove a floating overlay by ID.
     RemoveOverlay { id: String },
-    /// Gracefully terminate the active `cth` session.
+    /// Gracefully terminate the active `thud` session.
     Quit,
 }
 
@@ -498,22 +498,22 @@ impl Config {
         Self::from_toml(&content)
     }
 
-    /// Returns the default configuration file path (`$CTH_CONFIG` if set, otherwise `~/.config/cth/config.toml`).
+    /// Returns the default configuration file path (`$THUD_CONFIG` if set, otherwise `~/.config/thud/config.toml`).
     pub fn default_path() -> Option<PathBuf> {
-        if let Ok(custom_path) = std::env::var("CTH_CONFIG")
+        if let Ok(custom_path) = std::env::var("THUD_CONFIG")
             && !custom_path.is_empty()
         {
             return Some(PathBuf::from(custom_path));
         }
         std::env::var("HOME")
             .ok()
-            .map(|home| PathBuf::from(home).join(".config/cth/config.toml"))
+            .map(|home| PathBuf::from(home).join(".config/thud/config.toml"))
     }
 
-    /// Loads configuration from `$CTH_CONFIG` (if set) or `~/.config/cth/config.toml` if present,
+    /// Loads configuration from `$THUD_CONFIG` (if set) or `~/.config/thud/config.toml` if present,
     /// falling back to `Config::default()`.
     pub fn load_or_default() -> Result<Self, ConfigError> {
-        if let Ok(custom_path) = std::env::var("CTH_CONFIG")
+        if let Ok(custom_path) = std::env::var("THUD_CONFIG")
             && !custom_path.is_empty()
         {
             let p = PathBuf::from(custom_path);
@@ -587,17 +587,17 @@ impl Config {
     /// available options, widget types, and CLI/IPC usage examples.
     pub fn annotated_default_toml() -> &'static str {
         r#"# =============================================================================
-# cth - Terminal HUD & Compositor Configuration
-# Default path: ~/.config/cth/config.toml (or override via $CTH_CONFIG / --config)
+# thud - Terminal Heads Up Display Configuration
+# Default path: ~/.config/thud/config.toml (or override via $THUD_CONFIG / --config)
 # =============================================================================
 
 # Optional: Shell executable to spawn inside the PTY.
 # Defaults to $SHELL (or "/bin/sh" if $SHELL is unset).
 # shell = "/opt/homebrew/bin/fish"
 
-# Optional: Custom Unix domain socket path for IPC commands (`cth set`, `cth toast`, etc.).
-# Defaults to "/tmp/cth-<pid>.sock" and is exported as $CTH_SOCKET inside the session.
-# ipc_socket = "/tmp/cth.sock"
+# Optional: Custom Unix domain socket path for IPC commands (`thud set`, `thud toast`, etc.).
+# Defaults to "/tmp/thud-<pid>.sock" and is exported as $THUD_SOCKET inside the session.
+# ipc_socket = "/tmp/thud.sock"
 
 # Hotkey to toggle Zen Mode (temporarily hides all HUD elements and expands the PTY):
 zen_toggle_key = "ctrl-\\"
@@ -624,7 +624,7 @@ bg_ansi = 236
 #
 # Available widget types (`type = ...`):
 #   1. { type = "cwd" }
-#      -> Current working directory of the foreground process (e.g. "~/dev/cth")
+#      -> Current working directory of the foreground process (e.g. "~/dev/thud")
 #   2. { type = "git_branch" }
 #      -> Current Git branch or short commit SHA (e.g. "git:main")
 #   3. { type = "active_command", min_secs = 2 }
@@ -638,11 +638,11 @@ bg_ansi = 236
 #   7. { type = "command", id = "k8s", cmd = "kubectl config current-context", interval_ms = 5000 }
 #      -> Periodic non-blocking `sh -c` command output refreshed every `interval_ms`
 #   8. { type = "ipc_slot", key = "status" }
-#      -> Dynamic slot updated via `cth set status "BUILDING..." --ttl-ms 5000`
+#      -> Dynamic slot updated via `thud set status "BUILDING..." --ttl-ms 5000`
 #   9. { type = "sparkline", key = "cpu", width = 8 }
-#      -> Historical mini-graph (`▁▂▃▄▅▆▇█`) fed via `cth progress cpu 65`
+#      -> Historical mini-graph (`▁▂▃▄▅▆▇█`) fed via `thud progress cpu 65`
 #  10. { type = "gauge", key = "build", width = 10, label = "Build" }
-#      -> Progress bar (`━━━─── 60%`) fed via `cth progress build 60 --label "Compiling"`
+#      -> Progress bar (`━━━─── 60%`) fed via `thud progress build 60 --label "Compiling"`
 left = [
     { type = "cwd" },
     { type = "git_branch" },
@@ -799,7 +799,7 @@ mod tests {
     #[test]
     fn write_default_file_creates_and_protects_existing_file_unless_forced() {
         let temp_path =
-            std::env::temp_dir().join(format!("cth-config-test-{}.toml", std::process::id()));
+            std::env::temp_dir().join(format!("thud-config-test-{}.toml", std::process::id()));
         let _ = fs::remove_file(&temp_path);
 
         let written = Config::write_default_file(Some(temp_path.clone()), false).unwrap();

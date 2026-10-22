@@ -67,7 +67,7 @@ impl Session {
         let initial_child_size = compositor.child_size();
 
         let socket_path = config.ipc_socket.clone().unwrap_or_else(|| {
-            std::env::temp_dir().join(format!("cth-{}.sock", std::process::id()))
+            std::env::temp_dir().join(format!("thud-{}.sock", std::process::id()))
         });
         let ipc_server = OsIpcServer::bind(&socket_path)?;
 
@@ -222,20 +222,20 @@ impl Session {
         HeadlessHarness::new(config, TermSize { cols, rows })
     }
 
-    /// Sends a single `IpcMessage` over the Unix domain socket to a running `cth` session.
+    /// Sends a single `IpcMessage` over the Unix domain socket to a running `thud` session.
     pub fn send_ipc_message(
         socket_path: Option<PathBuf>,
         msg: &IpcMessage,
     ) -> Result<(), SessionError> {
-        let path = match socket_path.or_else(|| std::env::var("CTH_SOCKET").ok().map(PathBuf::from))
-        {
-            Some(p) => p,
-            None => {
-                return Err(SessionError::Ipc(
-                    "CTH_SOCKET is not set and no --socket path was provided".to_string(),
-                ));
-            }
-        };
+        let path =
+            match socket_path.or_else(|| std::env::var("THUD_SOCKET").ok().map(PathBuf::from)) {
+                Some(p) => p,
+                None => {
+                    return Err(SessionError::Ipc(
+                        "THUD_SOCKET is not set and no --socket path was provided".to_string(),
+                    ));
+                }
+            };
 
         let mut stream = UnixStream::connect(&path)?;
         let mut payload =
@@ -523,10 +523,10 @@ impl OsChildPty {
         }
 
         if pid == 0 {
-            // Child process: set CTH_SOCKET and exec the user's shell
+            // Child process: set THUD_SOCKET and exec the user's shell
             unsafe {
-                std::env::set_var("CTH_SOCKET", socket_path.as_os_str());
-                std::env::set_var("CTH_ACTIVE", "1");
+                std::env::set_var("THUD_SOCKET", socket_path.as_os_str());
+                std::env::set_var("THUD_ACTIVE", "1");
             }
             let c_shell = CString::new(shell).unwrap_or_else(|_| CString::new("/bin/sh").unwrap());
             unsafe {
@@ -925,7 +925,7 @@ mod tests {
 
     #[test]
     fn unix_socket_ipc_roundtrip_delivers_messages_and_cleans_up_on_drop() {
-        let sock_path = std::env::temp_dir().join(format!("cth-test-{}.sock", std::process::id()));
+        let sock_path = std::env::temp_dir().join(format!("thud-test-{}.sock", std::process::id()));
         {
             let server = OsIpcServer::bind(&sock_path).unwrap();
             Session::send_ipc_message(
