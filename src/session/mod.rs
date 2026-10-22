@@ -65,12 +65,7 @@ impl Session {
     /// spawns the child shell inside a PTY, binds the Unix domain socket for IPC,
     /// runs the non-blocking compositor loop, and restores terminal state on exit.
     pub fn run(config: Config) -> Result<i32, SessionError> {
-        if std::env::var("THUD_ACTIVE")
-            .ok()
-            .is_some_and(|v| !v.is_empty() && v != "0")
-        {
-            return Err(SessionError::NestedSession);
-        }
+        Self::check_nested_session()?;
 
         let mut host = OsHostTerminal::enter()?;
         let initial_host_size = host.size()?;
@@ -299,6 +294,28 @@ impl Session {
         ipc::send_ipc_message(socket_path, msg)
     }
 
+    pub(crate) fn check_nested_session() -> Result<(), SessionError> {
+        if std::env::var("THUD_ACTIVE")
+            .ok()
+            .is_some_and(|v| !v.is_empty() && v != "0")
+        {
+            if let Ok(sock) = std::env::var("THUD_SOCKET") {
+                if std::os::unix::net::UnixStream::connect(&sock).is_ok() {
+                    return Err(SessionError::NestedSession);
+                }
+                // Socket is unreachable: previous session terminated abnormally.
+                // Clear stale inherited environment variables and proceed.
+                unsafe {
+                    std::env::remove_var("THUD_ACTIVE");
+                    std::env::remove_var("THUD_SOCKET");
+                }
+            } else {
+                return Err(SessionError::NestedSession);
+            }
+        }
+        Ok(())
+    }
+
     fn current_config_mtime() -> Option<std::time::SystemTime> {
         let path = Config::default_path()?;
         std::fs::metadata(path).ok()?.modified().ok()
@@ -476,5 +493,33 @@ mod tests {
             );
         }
         assert!(!sock_path.exists());
+    }
+
+    #[test]
+    fn validates_nested_session_checks_socket_liveness() {
+        let sock_path =
+            std::env::temp_dir().join(format!("thud-alive-check-{}.sock", std::process::id()));
+        let _server = OsIpcServer::bind(&sock_path).unwrap();
+
+        unsafe {
+            std::env::set_var("THUD_ACTIVE", "1");
+            std::env::set_var("THUD_SOCKET", sock_path.as_os_str());
+        }
+
+        assert!(matches!(
+            Session::check_nested_session(),
+            Err(SessionError::NestedSession)
+        ));
+
+        // When socket is dead / unreachable, stale env vars are cleared and session is allowed
+        let dead_sock = std::env::temp_dir().join("thud-dead-sock-test.sock");
+        let _ = std::fs::remove_file(&dead_sock);
+        unsafe {
+            std::env::set_var("THUD_ACTIVE", "1");
+            std::env::set_var("THUD_SOCKET", dead_sock.as_os_str());
+        }
+        assert!(Session::check_nested_session().is_ok());
+        assert!(std::env::var("THUD_ACTIVE").is_err());
+        assert!(std::env::var("THUD_SOCKET").is_err());
     }
 }

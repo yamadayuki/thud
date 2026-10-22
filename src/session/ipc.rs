@@ -60,7 +60,16 @@ pub(crate) fn send_ipc_message(
         }
     };
 
-    let mut stream = UnixStream::connect(&path)?;
+    let mut stream = UnixStream::connect(&path).map_err(|e| {
+        if e.kind() == io::ErrorKind::NotFound || e.kind() == io::ErrorKind::ConnectionRefused {
+            SessionError::Ipc(format!(
+                "no active thud session reachable at {} ({e})",
+                path.display()
+            ))
+        } else {
+            SessionError::Io(e)
+        }
+    })?;
     let mut payload = serde_json::to_string(msg).map_err(|e| SessionError::Ipc(e.to_string()))?;
     payload.push('\n');
     stream.write_all(payload.as_bytes())?;
