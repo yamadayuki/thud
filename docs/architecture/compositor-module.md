@@ -3,71 +3,99 @@ type: Architecture
 title: "Deep Compositor & Session Module Architecture"
 description: Two-tier deep module design pairing a deterministic Sans-I/O Compositor core with a declarative Session runner.
 tags: [architecture, codebase-design, compositor, seam, sans-io]
-generated: { by: antigravity/gemini-4, at: "2026-10-22T09:09:24Z" }
+generated: { by: antigravity/gemini-4, at: "2026-10-22T09:26:27Z" }
 status: stable
 ---
 
 ## Architecture Overview
 
-Following the `codebase-design` principles, `thud` avoids splitting terminal emulation, layout calculation, wide-character healing, widget state merging, and ANSI diff rendering into shallow pass-through modules. Instead, all pure computation and screen state live inside a single **In-process Deep Module** (`Compositor`), wrapped by an ergonomic `Session` runner with an **Internal Seam** for OS I/O.
+Following the `codebase-design` principles, `thud` preserves deep external seams (`Compositor`, `Session`, `Config`, and `ui`) while organizing implementation responsibilities into focused internal submodules with clean internal seams.
 
 ```mermaid
 flowchart TB
     subgraph ExternalCallers["Callers & Tests"]
         CLI["main.rs / CLI"]
         UnitTest["Deterministic Unit Tests"]
-        IntegTest["HeadlessHarness Integration Tests"]
+        IntegTest["HeadlessHarness & PTY E2E Tests"]
     end
 
-    subgraph SessionModule["Module: Session (Common-Caller Seam)"]
-        SessionRun["Session::run / Session::run_headless"]
-        subgraph InternalSeam["Internal Seam: RuntimeEnv"]
-            OsAdapter["Adapter: OsRuntimeAdapter (STDIN/STDOUT, PTY, UDS, Poll)"]
-            HeadlessAdapter["Adapter: HeadlessRuntimeAdapter (In-Memory)"]
+    subgraph SessionModule["Module: src/session/ (Common-Caller Seam)"]
+        SessionRun["mod.rs: Session::run / run_headless / send_ipc_message"]
+        subgraph InternalSeam["Internal OS & Test Adapters"]
+            TtyPty["tty.rs & pty.rs: OsHostTerminal / OsChildPty"]
+            IpcMod["ipc.rs: OsIpcServer & Client"]
+            ProbesMod["probes.rs: SystemProbes::sample()"]
+            HarnessMod["harness.rs: HeadlessHarness"]
         end
     end
 
-    subgraph CompositorModule["Module: Compositor (Sans-I/O Deep Core Seam)"]
-        Step["Compositor::new / Compositor::step(Event, Instant) -> Transition"]
-        VTE["Dual-Screen VT State Machine & Query Responder"]
-        Layout["HUD Layout Engine (Docked & Floating + Text/Cursor Dodge)"]
-        WChar["CJK Wide-Character Split Healer"]
-        Differ["Double-Buffered Minimal ANSI Diff Renderer"]
+    subgraph CompositorModule["Module: src/compositor/ (Sans-I/O Deep Core Seam)"]
+        Step["mod.rs: Compositor::new / step(Event, Instant) -> Transition"]
+        Store["store.rs: TelemetryStore (TTL Slots, Metrics, Toasts, ActiveCmd)"]
+        VTE["vt.rs: VtScreenAdapter & Terminal Query Responder"]
+        Layout["layout.rs: PlacementSolver (Anchor & Text/Cursor Dodge)"]
+    end
+
+    subgraph UiModule["Module: src/ui/ (Ratatui-Style 2D Cell Rendering Seam)"]
+        Primitives["style.rs / rect.rs / text.rs (Rect, Span, Line, CellStyle)"]
+        Surface["buffer.rs: Buffer (2D Grid + CJK Wide-Char Healing + ANSI Diff)"]
+        Widgets["widgets.rs: Widget trait, Block, Gauge, Sparkline, StatusBar, Toast"]
     end
 
     CLI --> SessionRun
     IntegTest --> SessionRun
     UnitTest --> Step
+    UnitTest --> Surface
     SessionRun --> InternalSeam
     SessionRun --> Step
+    Step --> Store
     Step --> VTE
     Step --> Layout
-    Step --> WChar
-    Step --> Differ
+    Step --> Widgets
+    Widgets --> Surface
+    Primitives --> Surface
 ```
 
 ## Module Responsibilities & Seams
 
-### 1. Core Module: `Compositor` (Sans-I/O Deep Seam)
+### 1. 2D Rendering Foundation: `src/ui/`
+
+- **Interface**:
+  - `Rect`, `Span`, `Line`, `Buffer`, and `Widget::render(self, area: Rect, buf: &mut Buffer)`.
+- **Hides**:
+  - 2D cell coordinate clipping and `Block` border inner-area geometry.
+  - Multi-span styled text measurement (`Line::width()`) and rendering.
+  - Automatic CJK 2-cell wide-character split boundary healing on every cell write.
+  - Double-buffered minimal ANSI SGR/CUP diff emission (`Buffer::diff(&prev, cursor)`).
+
+### 2. Core Module: `src/compositor/` (Sans-I/O Deep Seam)
 
 - **Interface**:
   - `Compositor::new(config: Config, host_size: TermSize) -> Self`
   - `Compositor::step(&mut self, event: Event, now: Instant) -> Transition`
-- **Hides**:
-  - Dual-screen VT100/ANSI state machine (Primary Screen vs Alternate Screen `?1049h`/`?1049l`) via `vt100::Parser`.
-  - Terminal capability/status query responder (`DA1`, `DA2`, `DSR 5/6`, `XTVERSION`, Kitty keyboard, `OSC 10/11`) returning synthetic responses in `Transition::child_pty_input` so shells like `fish` never block on startup.
-  - Child PTY viewport deduction (`child_size = host_size - docked_rows`).
-  - Non-destructive floating overlay compositing with cursor-collision AND underlying non-whitespace text collision policies (`Ignore`, `AutoHide`, `DodgeToOppositeCorner`).
-  - CJK wide-character split healing (replacing orphaned half-width cells with spaces when an overlay edge lands on half of a 2-cell CJK character).
-  - Double-buffered cell diffing that emits minimal ANSI sequences (`Transition::host_ansi_diff`) and restores the child's exact cursor coordinates and visibility.
+- **Internal Submodules**:
+  - `store.rs` (`TelemetryStore`): Manages ephemeral IPC slots, metric ring buffers, stacked toast notifications, periodic command outputs, and foreground command timers.
+  - `vt.rs` (`VtScreenAdapter`): Wraps `vt100::Parser` (Primary/Alternate screen), copies virtual terminal cells into `Buffer`, and synthesizes replies to terminal queries (`DA1`, `DA2`, `DSR 5/6`, `XTVERSION`, Kitty keyboard, `OSC 10/11`).
+  - `layout.rs` (`PlacementSolver`): Computes child PTY viewport size and resolves floating overlay bounding-box positions with cursor and non-whitespace text collision dodging (`Ignore`, `AutoHide`, `DodgeToOppositeCorner`).
 
-### 2. Outer Module: `Session` (Caller Seam + Internal OS Seam)
+### 3. Outer Module: `src/session/` (Caller Seam + Internal OS Seam)
 
 - **External Interface**:
-  - `Session::run(config: Config) -> Result<i32, SessionError>` for production CLI startup.
-  - `Session::run_headless(config: Config, cols: u16, rows: u16) -> Result<HeadlessHarness, SessionError>` for multi-step integration tests.
-- **Internal Seam & OS Constraints**:
-  - On macOS (XNU), `poll(2)` on `/dev/tty` immediately returns `POLLNVAL (0x20)` rather than `POLLIN`. `OsHostTerminal` therefore polls and configures `STDIN_FILENO` (`0`) directly (which references the underlying slave PTY device) and writes diffs to `STDOUT_FILENO` (`1`).
+  - `Session::run(config: Config) -> Result<i32, SessionError>`
+  - `Session::run_headless(config: Config, cols: u16, rows: u16) -> Result<HeadlessHarness, SessionError>`
+- **Internal Submodules**:
+  - `tty.rs` (`OsHostTerminal`): Polls and configures `STDIN_FILENO` (`0`) directly (avoiding macOS XNU `/dev/tty` `POLLNVAL`), writes diffs to `STDOUT_FILENO` (`1`), and tracks `SIGWINCH`.
+  - `pty.rs` (`OsChildPty`): Manages `forkpty`, `TIOCSWINSZ`, non-blocking PTY I/O, and child lifecycle.
+  - `ipc.rs` (`OsIpcServer`): Non-blocking Unix domain socket listener and client message sender.
+  - `probes.rs` (`SystemProbes`): Stateful OS telemetry collector (`sample(master_fd, child_pid, now) -> BuiltinValues`) encapsulating battery cache, CWD, Git branch, and foreground process command inspection.
+  - `harness.rs` (`HeadlessHarness`): Deterministic in-memory adapter for multi-step integration tests.
+
+### 4. Configuration Module: `src/config/`
+
+- **Internal Submodules**:
+  - `mod.rs`: Declarative TOML schema (`Config`, `StatusBarConfig`, `OverlayConfig`, `WidgetSpec`) and file loader/writer.
+  - `ipc.rs`: Wire protocol types (`IpcMessage`, `ToastLevel`).
+  - `default_config.toml`: Annotated default configuration template embedded via `include_str!`.
 
 # Related Concepts
 - [Core Terminal HUD & Compositor Requirements](../requirements/core-hud-capabilities.md): satisfies core terminal HUD, full-screen overlay, and widget requirements

@@ -1,4 +1,5 @@
 ## 2026-10-22
+* **Creation**: Documented concept `decisions/adr-002-modular-decomposition-and-ui-buffer-seam.md` (ADR-002: Internal Module Decomposition and Ratatui-Style 2D UI Buffer Seam).
 * **Update**: Updated concept `decisions/adr-001-design-it-twice-compositor-seam.md`.
 * **Update**: Updated concept `requirements/core-hud-capabilities.md`.
 * **Update**: Updated concept `architecture/compositor-module.md`.
