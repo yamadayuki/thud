@@ -1,90 +1,12 @@
+pub mod ipc;
+pub mod template;
+
+pub use crate::ui::{Anchor, BorderStyle, CellStyle, Color, TermSize};
+pub use ipc::{IpcMessage, ToastLevel};
+
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
-
-/// Terminal dimensions in character cells.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub struct TermSize {
-    pub cols: u16,
-    pub rows: u16,
-}
-
-/// Terminal color representation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Color {
-    #[default]
-    Default,
-    Ansi(u8),
-    Rgb(u8, u8, u8),
-}
-
-/// Visual cell styling attributes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-pub struct CellStyle {
-    #[serde(default)]
-    pub fg: Color,
-    #[serde(default)]
-    pub bg: Color,
-    #[serde(default)]
-    pub bold: bool,
-    #[serde(default)]
-    pub italic: bool,
-    #[serde(default)]
-    pub underline: bool,
-    #[serde(default)]
-    pub inverse: bool,
-}
-
-/// Corner or edge anchor for floating overlays.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Anchor {
-    #[default]
-    TopRight,
-    TopLeft,
-    TopCenter,
-    BottomRight,
-    BottomLeft,
-    BottomCenter,
-}
-
-impl Anchor {
-    /// Returns the horizontally opposite anchor used when dodging the cursor.
-    pub fn opposite_horizontal(self) -> Self {
-        match self {
-            Anchor::TopRight => Anchor::TopLeft,
-            Anchor::TopLeft => Anchor::TopRight,
-            Anchor::TopCenter => Anchor::BottomCenter,
-            Anchor::BottomRight => Anchor::BottomLeft,
-            Anchor::BottomLeft => Anchor::BottomRight,
-            Anchor::BottomCenter => Anchor::TopCenter,
-        }
-    }
-}
-
-/// Box border style for floating overlays and HUD panels.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum BorderStyle {
-    #[default]
-    None,
-    Single,
-    Rounded,
-    Double,
-}
-
-impl BorderStyle {
-    /// Returns `(top_left, top_right, bottom_left, bottom_right, horizontal, vertical)` box chars.
-    pub fn chars(self) -> Option<(char, char, char, char, char, char)> {
-        match self {
-            BorderStyle::None => None,
-            BorderStyle::Single => Some(('┌', '┐', '└', '┘', '─', '│')),
-            BorderStyle::Rounded => Some(('╭', '╮', '╰', '╯', '─', '│')),
-            BorderStyle::Double => Some(('╔', '╗', '╚', '╝', '═', '║')),
-        }
-    }
-}
 
 /// Policy when the child terminal's cursor or text collides with a floating overlay.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -138,15 +60,15 @@ pub enum ScreenCondition {
 /// Optional per-widget segment styling and capsule/powerline affixes.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct SegmentFormat {
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fg_ansi: Option<u8>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bg_ansi: Option<u8>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bold: Option<bool>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prefix: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub suffix: Option<String>,
 }
 
@@ -192,7 +114,7 @@ pub enum WidgetKind {
         key: String,
         #[serde(default = "default_gauge_width")]
         width: usize,
-        #[serde(default)]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         label: Option<String>,
     },
 }
@@ -318,7 +240,7 @@ pub struct OverlayConfig {
     pub collision: CollisionPolicy,
     #[serde(default)]
     pub border: BorderStyle,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
     #[serde(default = "default_overlay_fg")]
     pub fg_ansi: u8,
@@ -327,7 +249,7 @@ pub struct OverlayConfig {
     #[serde(default = "default_true")]
     pub bold: bool,
     pub widget: WidgetSpec,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ttl_ms: Option<u64>,
 }
 
@@ -399,71 +321,6 @@ impl Default for Config {
             overlays: default_overlays(),
         }
     }
-}
-
-/// Toast notification severity level.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ToastLevel {
-    #[default]
-    Info,
-    Success,
-    Warn,
-    Error,
-}
-
-impl ToastLevel {
-    /// Returns `(fg_ansi, bg_ansi, icon_prefix)` for this toast level.
-    pub fn palette(self) -> (u8, u8, &'static str) {
-        match self {
-            ToastLevel::Info => (231, 24, "ℹ "),
-            ToastLevel::Success => (231, 28, "✓ "),
-            ToastLevel::Warn => (232, 214, "⚠ "),
-            ToastLevel::Error => (231, 160, "✗ "),
-        }
-    }
-}
-
-/// Dynamic IPC payload sent over the Unix domain socket in JSON format.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "action", rename_all = "snake_case")]
-pub enum IpcMessage {
-    /// Set or update a named IPC slot (`{ "action": "set_slot", "key": "mode", "value": "NORMAL" }`).
-    SetSlot {
-        key: String,
-        value: String,
-        #[serde(default)]
-        ttl_ms: Option<u64>,
-    },
-    /// Clear a named IPC slot.
-    ClearSlot { key: String },
-    /// Push a numeric metric sample (`0..=100`) for sparkline and gauge widgets.
-    PushMetric {
-        key: String,
-        value: u8,
-        #[serde(default)]
-        label: Option<String>,
-        #[serde(default)]
-        ttl_ms: Option<u64>,
-    },
-    /// Enqueue a stacked toast notification overlay.
-    Toast {
-        message: String,
-        #[serde(default)]
-        level: ToastLevel,
-        #[serde(default = "default_toast_ttl_ms")]
-        ttl_ms: u64,
-    },
-    /// Dynamically add or update a floating overlay.
-    UpsertOverlay { overlay: OverlayConfig },
-    /// Remove a floating overlay by ID.
-    RemoveOverlay { id: String },
-    /// Gracefully terminate the active `thud` session.
-    Quit,
-}
-
-fn default_toast_ttl_ms() -> u64 {
-    4000
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -583,127 +440,6 @@ impl Config {
         }
     }
 
-    /// Returns a self-documenting TOML configuration string containing all default values,
-    /// available options, widget types, and CLI/IPC usage examples.
-    pub fn annotated_default_toml() -> &'static str {
-        r#"# =============================================================================
-# thud - Terminal Heads Up Display Configuration
-# Default path: ~/.config/thud/config.toml (or override via $THUD_CONFIG / --config)
-# =============================================================================
-
-# Optional: Shell executable to spawn inside the PTY.
-# Defaults to $SHELL (or "/bin/sh" if $SHELL is unset).
-# shell = "/opt/homebrew/bin/fish"
-
-# Optional: Custom Unix domain socket path for IPC commands (`thud set`, `thud toast`, etc.).
-# Defaults to "/tmp/thud-<pid>.sock" and is exported as $THUD_SOCKET inside the session.
-# ipc_socket = "/tmp/thud.sock"
-
-# Hotkey to toggle Zen Mode (temporarily hides all HUD elements and expands the PTY):
-zen_toggle_key = "ctrl-\\"
-
-# Hotkey to toggle Dashboard overlays (`screen_mode = "dashboard_only"`):
-dashboard_toggle_key = "ctrl-]"
-
-# -----------------------------------------------------------------------------
-# Docked Bottom Status Bar (Vim-like status line)
-# Reserves `height` row(s) at the bottom of the terminal so child applications
-# (including fullscreen TUI apps like vim, htop, fzf, less) never overwrite it.
-# -----------------------------------------------------------------------------
-[status_bar]
-enabled = true
-height = 1
-separator = " │ "
-# Default 256-color ANSI palette index (0-255): 255 = bright white, 236 = dark charcoal
-fg_ansi = 255
-bg_ansi = 236
-
-# Widgets placed on the left, center, and right of the status bar.
-# Every widget supports optional per-segment styling & capsule affixes:
-#   fg_ansi = 231, bg_ansi = 24, bold = true, prefix = " ", suffix = " "
-#
-# Available widget types (`type = ...`):
-#   1. { type = "cwd" }
-#      -> Current working directory of the foreground process (e.g. "~/dev/thud")
-#   2. { type = "git_branch" }
-#      -> Current Git branch or short commit SHA (e.g. "git:main")
-#   3. { type = "active_command", min_secs = 2 }
-#      -> Foreground process name & elapsed timer when running >= min_secs (e.g. "⚙ cargo (5s)")
-#   4. { type = "battery" }
-#      -> System battery level (e.g. "BAT 100%")
-#   5. { type = "clock", format = "%Y-%m-%d %H:%M:%S" }
-#      -> Local time formatted with strftime syntax (default: "%H:%M:%S")
-#   6. { type = "text", text = "PROD" }
-#      -> Static label string
-#   7. { type = "command", id = "k8s", cmd = "kubectl config current-context", interval_ms = 5000 }
-#      -> Periodic non-blocking `sh -c` command output refreshed every `interval_ms`
-#   8. { type = "ipc_slot", key = "status" }
-#      -> Dynamic slot updated via `thud set status "BUILDING..." --ttl-ms 5000`
-#   9. { type = "sparkline", key = "cpu", width = 8 }
-#      -> Historical mini-graph (`▁▂▃▄▅▆▇█`) fed via `thud progress cpu 65`
-#  10. { type = "gauge", key = "build", width = 10, label = "Build" }
-#      -> Progress bar (`━━━─── 60%`) fed via `thud progress build 60 --label "Compiling"`
-left = [
-    { type = "cwd" },
-    { type = "git_branch" },
-    { type = "active_command", min_secs = 2 },
-    { type = "ipc_slot", key = "status" },
-]
-
-center = []
-
-right = [
-    { type = "battery" },
-]
-
-# -----------------------------------------------------------------------------
-# Floating Overlays (Non-destructive HUD layers composited over the terminal)
-# Overlays do not shrink the child PTY or mutate its screen buffer; when moved
-# or hidden, the underlying terminal characters (including wide CJK chars) are
-# restored automatically.
-# -----------------------------------------------------------------------------
-[[overlays]]
-id = "clock"
-
-# Anchor position on the child terminal viewport:
-#   "top_right" | "top_left" | "top_center" | "bottom_right" | "bottom_left" | "bottom_center"
-anchor = "top_right"
-offset_x = 0
-offset_y = 0
-z_index = 10
-
-# Which screen buffer mode this overlay is visible in:
-#   "always"         -> Both normal shell and fullscreen TUI apps (vim, htop, less)
-#   "primary_only"   -> Only normal shell screen; hidden during fullscreen TUI apps
-#   "alternate_only" -> Only during fullscreen TUI apps
-#   "dashboard_only" -> Only when toggled via `dashboard_toggle_key` (default: Ctrl+])
-screen_mode = "always"
-
-# Optional box border around the overlay:
-#   "none" | "single" | "rounded" | "double"
-border = "none"
-# title = " TIME "
-
-# 256-color ANSI palette index (0-255) and text weight
-fg_ansi = 231
-bg_ansi = 238
-bold = true
-
-# Behavior when the child cursor or terminal text reaches the overlay region:
-#   1. { mode = "dodge_to_opposite_corner", margin = 1, avoid_text = true }
-#   2. { mode = "auto_hide", margin = 1, avoid_text = true }
-#   3. { mode = "ignore" }
-[overlays.collision]
-mode = "dodge_to_opposite_corner"
-margin = 1
-avoid_text = true
-
-[overlays.widget]
-type = "clock"
-format = " %H:%M:%S "
-"#
-    }
-
     /// Reserved bottom rows for the docked status bar.
     pub fn reserved_bottom_rows(&self) -> u16 {
         if self.status_bar.enabled {
@@ -773,6 +509,11 @@ mod tests {
         assert_eq!(cfg.status_bar.left[0].style.bg_ansi, Some(24));
         assert_eq!(cfg.overlays[0].border, BorderStyle::Rounded);
         assert_eq!(cfg.overlays[0].title.as_deref(), Some(" CLOCK "));
+
+        // Also verify dynamic `to_annotated_toml()` round-trips customized Config!
+        let regenerated = cfg.to_annotated_toml();
+        let reparsed = Config::from_toml(&regenerated).expect("regenerated TOML must be valid");
+        assert_eq!(reparsed, cfg);
     }
 
     #[test]
@@ -791,8 +532,8 @@ mod tests {
 
     #[test]
     fn annotated_default_toml_parses_to_exact_default_config() {
-        let parsed = Config::from_toml(Config::annotated_default_toml())
-            .expect("annotated_default_toml must be valid TOML");
+        let generated = Config::annotated_default_toml();
+        let parsed = Config::from_toml(&generated).expect("annotated_default_toml must be valid");
         assert_eq!(parsed, Config::default());
     }
 

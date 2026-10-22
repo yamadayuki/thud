@@ -1,6 +1,7 @@
 pub mod compositor;
 pub mod config;
 pub mod session;
+pub mod ui;
 
 pub use compositor::{BuiltinValues, Compositor, Event, Transition};
 pub use config::{
@@ -9,3 +10,6 @@ pub use config::{
     WidgetKind, WidgetSpec,
 };
 pub use session::{HeadlessHarness, Session, SessionError};
+pub use ui::{
+    Block, Buffer, Cell, CursorState, Gauge, Line, Rect, Span, Sparkline, StatusBar, Toast, Widget,
+};

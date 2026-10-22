@@ -3,7 +3,7 @@ type: decision
 title: "ADR-002: Internal Module Decomposition and Ratatui-Style 2D UI Buffer Seam"
 description: Decomposes monolithic compositor/session/config modules into focused submodules and introduces a Ratatui-inspired 2D Buffer/Span/Line/Widget rendering foundation in src/ui/.
 tags: [adr, architecture, ui, buffer, widgets, seam, locality]
-generated: { by: antigravity/gemini-4, at: "2026-10-22T09:26:07Z" }
+generated: { by: antigravity/gemini-4, at: "2026-10-22T09:38:42Z" }
 status: stable
 ---
 
@@ -14,7 +14,7 @@ As `thud` grew to support capsule status bars, bordered floating panels, sparkli
 1. Widget evaluation in `src/compositor.rs` flattened every HUD element into a single-style `String`, making multi-style widgets (such as a `Gauge` with distinct label, filled bar, dimmed track, and percentage styles, or a `Block` with distinct border and title styles) impossible without manual string slicing.
 2. Wide-character CJK boundary healing, 2D cell storage, and minimal ANSI SGR/CUP diff generation were split across `FrameGrid` and `Compositor::compose_and_diff`.
 3. `src/session.rs` mixed raw `libc` termios/PTY management, Unix domain socket framing, OS process/battery probes, and the deterministic `HeadlessHarness`.
-4. `src/config.rs` embedded a 120-line raw TOML template string alongside UI style primitives and IPC wire types.
+4. `src/config.rs` embedded a hardcoded 120-line raw TOML template string alongside UI style primitives and IPC wire types.
 
 ## Decision
 
@@ -24,7 +24,7 @@ We preserve the existing public crate seams (`Compositor`, `Session`, `Config`) 
    - `style.rs`: `Color`, `CellStyle`, `BorderStyle`, `Anchor`, `TermSize` (re-exported at root and `config` for compatibility).
    - `rect.rs`: `Rect` geometry (`inner`, `intersection`, `contains`).
    - `text.rs`: `Span` and `Line` supporting multi-style inline text and Unicode display width calculation.
-   - `buffer.rs`: `Cell` and `Buffer` encapsulating 2D cell storage, automatic CJK 2-cell wide-character boundary healing, and `Buffer::diff(&prev, cursor) -> Vec<u8>` minimal ANSI output generation.
+   - `buffer.rs`: `Cell` and `Buffer` encapsulating 2D cell storage, automatic CJK 2-cell wide-character boundary healing, and `Buffer::diff(&prev)` minimal ANSI output generation.
    - `widgets.rs`: `Widget` trait (`render(self, area: Rect, buf: &mut Buffer)`) and concrete components (`Block`, `Gauge`, `Sparkline`, `StatusBar`, `Toast`).
 2. **`src/compositor/` Decomposition**:
    - `mod.rs`: Public `Compositor::new` / `Compositor::step`, `Event`, `Transition`, `BuiltinValues`.
@@ -41,7 +41,7 @@ We preserve the existing public crate seams (`Compositor`, `Session`, `Config`) 
 4. **`src/config/` Decomposition**:
    - `mod.rs`: Declarative HUD configuration structs and loader/writer methods.
    - `ipc.rs`: `IpcMessage` and `ToastLevel`.
-   - `default_config.toml`: Embedded via `include_str!("default_config.toml")`.
+   - `template.rs`: `Config::to_annotated_toml(&self)` and `Config::annotated_default_toml()` dynamically generating the documented TOML configuration directly from a `Config` instance so default values never drift from the schema.
 
 # Related Concepts
 - [Deep Compositor & Session Module Architecture](../architecture/compositor-module.md): refines the internal module decomposition and introduces the `src/ui/` rendering seam
