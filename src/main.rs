@@ -96,7 +96,22 @@ fn try_main() -> Result<(), SessionError> {
         }
         Some("quit" | "exit") => {
             let flags = parse_ipc_flags(&args[1..])?;
-            Session::send_ipc_message(flags.socket, &IpcMessage::Quit)
+            match Session::send_ipc_message(flags.socket, &IpcMessage::Quit) {
+                Ok(()) => Ok(()),
+                Err(SessionError::Ipc(msg))
+                    if msg.contains("no active thud session reachable")
+                        || msg.contains("THUD_SOCKET is not set") =>
+                {
+                    unsafe {
+                        std::env::remove_var("THUD_ACTIVE");
+                        std::env::remove_var("THUD_SOCKET");
+                        std::env::remove_var("THUD_TTY");
+                    }
+                    println!("No active thud session is running. Cleaned up environment.");
+                    Ok(())
+                }
+                Err(err) => Err(err),
+            }
         }
         Some("init-config") => {
             let (output_path, force) = parse_init_config_flags(&args[1..]);
@@ -115,7 +130,7 @@ fn try_main() -> Result<(), SessionError> {
             print_help();
             Ok(())
         }
-        Some(flag) if flag.starts_with("--") => {
+        Some(flag) if flag.starts_with('-') => {
             let config = parse_run_config(&args)?;
             let code = Session::run(config)?;
             std::process::exit(code);
@@ -133,6 +148,7 @@ fn parse_run_config(args: &[String]) -> Result<Config, SessionError> {
     }
     let mut config_path: Option<PathBuf> = None;
     let mut shell_override: Option<String> = None;
+    let mut force = false;
 
     while idx < args.len() {
         match args[idx].as_str() {
@@ -147,6 +163,9 @@ fn parse_run_config(args: &[String]) -> Result<Config, SessionError> {
                 if let Some(sh) = args.get(idx) {
                     shell_override = Some(sh.clone());
                 }
+            }
+            "--force" | "-f" => {
+                force = true;
             }
             _ => {}
         }
@@ -164,6 +183,9 @@ fn parse_run_config(args: &[String]) -> Result<Config, SessionError> {
     };
     if let Some(sh) = shell_override {
         cfg.shell = Some(sh);
+    }
+    if force {
+        cfg.force = true;
     }
     Ok(cfg)
 }
@@ -256,7 +278,7 @@ fn print_help() {
 thud - Terminal Heads Up Display (terminal-emulator-agnostic & shell-agnostic HUD compositor)
 
 USAGE:
-  thud [run] [--config <path>] [--shell <shell>]             Start interactive terminal HUD session
+  thud [run] [--config <path>] [--shell <shell>] [--force]   Start interactive terminal HUD session
   thud init-config [--output <path>] [--force]               Write annotated config file (~/.config/thud/config.toml)
   thud print-default-config                                  Print annotated default TOML configuration
   thud set <key> <value> [--ttl-ms <ms>]                     Update an IPC status slot

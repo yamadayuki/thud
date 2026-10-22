@@ -398,6 +398,8 @@ pub struct Config {
     pub status_bar: StatusBarConfig,
     #[serde(default)]
     pub toast: ToastConfig,
+    #[serde(default)]
+    pub force: bool,
     #[serde(default = "default_overlays")]
     pub overlays: Vec<OverlayConfig>,
 }
@@ -456,6 +458,7 @@ impl Default for Config {
             scrollback_lines: default_scrollback_lines(),
             status_bar: StatusBarConfig::default(),
             toast: ToastConfig::default(),
+            force: false,
             overlays: default_overlays(),
         }
     }

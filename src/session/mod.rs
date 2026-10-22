@@ -36,7 +36,7 @@ impl std::fmt::Display for SessionError {
             SessionError::Ipc(msg) => write!(f, "IPC error: {msg}"),
             SessionError::NestedSession => write!(
                 f,
-                "cannot start a nested thud session inside an active thud session ($THUD_ACTIVE is set)"
+                "cannot start a nested thud session inside an active thud session (use 'thud --force' to override, or 'exit' to leave)"
             ),
         }
     }
@@ -65,7 +65,7 @@ impl Session {
     /// spawns the child shell inside a PTY, binds the Unix domain socket for IPC,
     /// runs the non-blocking compositor loop, and restores terminal state on exit.
     pub fn run(config: Config) -> Result<i32, SessionError> {
-        Self::check_nested_session()?;
+        Self::check_nested_session(config.force)?;
 
         let mut host = OsHostTerminal::enter()?;
         let initial_host_size = host.size()?;
@@ -115,6 +115,10 @@ impl Session {
 
         let mut buf = [0u8; 8192];
         let exit_code = loop {
+            if tty::take_sigterm() {
+                break 0;
+            }
+
             if let Some(code) = pty.try_wait()? {
                 break code;
             }
@@ -294,23 +298,57 @@ impl Session {
         ipc::send_ipc_message(socket_path, msg)
     }
 
-    pub(crate) fn check_nested_session() -> Result<(), SessionError> {
+    pub(crate) fn check_nested_session(force: bool) -> Result<(), SessionError> {
+        let current_tty = tty::get_tty_name(libc::STDIN_FILENO);
+        Self::check_nested_session_impl(force, current_tty.as_deref())
+    }
+
+    pub(crate) fn check_nested_session_impl(
+        force: bool,
+        current_tty: Option<&str>,
+    ) -> Result<(), SessionError> {
+        if force {
+            unsafe {
+                std::env::remove_var("THUD_ACTIVE");
+                std::env::remove_var("THUD_SOCKET");
+                std::env::remove_var("THUD_TTY");
+            }
+            return Ok(());
+        }
+
         if std::env::var("THUD_ACTIVE")
             .ok()
             .is_some_and(|v| !v.is_empty() && v != "0")
         {
+            // If THUD_TTY is set and differs from current terminal's TTY, this is a separate terminal window/tab
+            if let Ok(thud_tty) = std::env::var("THUD_TTY")
+                && let Some(curr_tty) = current_tty
+                && thud_tty != curr_tty
+            {
+                unsafe {
+                    std::env::remove_var("THUD_ACTIVE");
+                    std::env::remove_var("THUD_SOCKET");
+                    std::env::remove_var("THUD_TTY");
+                }
+                return Ok(());
+            }
+
             if let Ok(sock) = std::env::var("THUD_SOCKET") {
                 if std::os::unix::net::UnixStream::connect(&sock).is_ok() {
                     return Err(SessionError::NestedSession);
                 }
                 // Socket is unreachable: previous session terminated abnormally.
                 // Clear stale inherited environment variables and proceed.
+                let _ = std::fs::remove_file(&sock);
                 unsafe {
                     std::env::remove_var("THUD_ACTIVE");
                     std::env::remove_var("THUD_SOCKET");
+                    std::env::remove_var("THUD_TTY");
                 }
             } else {
-                return Err(SessionError::NestedSession);
+                unsafe {
+                    std::env::remove_var("THUD_ACTIVE");
+                }
             }
         }
         Ok(())
@@ -504,12 +542,19 @@ mod tests {
         unsafe {
             std::env::set_var("THUD_ACTIVE", "1");
             std::env::set_var("THUD_SOCKET", sock_path.as_os_str());
+            std::env::remove_var("THUD_TTY");
         }
 
+        // Alive socket without force rejects nested session
         assert!(matches!(
-            Session::check_nested_session(),
+            Session::check_nested_session(false),
             Err(SessionError::NestedSession)
         ));
+
+        // --force overrides even when socket is alive
+        assert!(Session::check_nested_session(true).is_ok());
+        assert!(std::env::var("THUD_ACTIVE").is_err());
+        assert!(std::env::var("THUD_SOCKET").is_err());
 
         // When socket is dead / unreachable, stale env vars are cleared and session is allowed
         let dead_sock = std::env::temp_dir().join("thud-dead-sock-test.sock");
@@ -517,9 +562,33 @@ mod tests {
         unsafe {
             std::env::set_var("THUD_ACTIVE", "1");
             std::env::set_var("THUD_SOCKET", dead_sock.as_os_str());
+            std::env::set_var("THUD_TTY", "/dev/ttys_stale");
         }
-        assert!(Session::check_nested_session().is_ok());
+        assert!(Session::check_nested_session(false).is_ok());
         assert!(std::env::var("THUD_ACTIVE").is_err());
         assert!(std::env::var("THUD_SOCKET").is_err());
+        assert!(std::env::var("THUD_TTY").is_err());
+
+        // When running in a different terminal window/tab (different TTY), allow and purge inherited env
+        unsafe {
+            std::env::set_var("THUD_ACTIVE", "1");
+            std::env::set_var("THUD_SOCKET", sock_path.as_os_str());
+            std::env::set_var("THUD_TTY", "/dev/ttys001");
+        }
+        assert!(Session::check_nested_session_impl(false, Some("/dev/ttys002")).is_ok());
+        assert!(std::env::var("THUD_ACTIVE").is_err());
+        assert!(std::env::var("THUD_SOCKET").is_err());
+        assert!(std::env::var("THUD_TTY").is_err());
+
+        // When running on the exact same TTY with alive socket, block
+        unsafe {
+            std::env::set_var("THUD_ACTIVE", "1");
+            std::env::set_var("THUD_SOCKET", sock_path.as_os_str());
+            std::env::set_var("THUD_TTY", "/dev/ttys001");
+        }
+        assert!(matches!(
+            Session::check_nested_session_impl(false, Some("/dev/ttys001")),
+            Err(SessionError::NestedSession)
+        ));
     }
 }

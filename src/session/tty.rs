@@ -3,14 +3,34 @@ use std::io::{self, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 static SIGWINCH_RECEIVED: AtomicBool = AtomicBool::new(false);
+static SIGTERM_RECEIVED: AtomicBool = AtomicBool::new(false);
 
 extern "C" fn handle_sigwinch(_sig: libc::c_int) {
     SIGWINCH_RECEIVED.store(true, Ordering::SeqCst);
 }
 
+extern "C" fn handle_sigterm(_sig: libc::c_int) {
+    SIGTERM_RECEIVED.store(true, Ordering::SeqCst);
+}
+
 /// Atomically takes and resets the `SIGWINCH` signal flag.
 pub(crate) fn take_sigwinch() -> bool {
     SIGWINCH_RECEIVED.swap(false, Ordering::SeqCst)
+}
+
+/// Atomically takes and resets the termination signal flag (`SIGTERM`, `SIGHUP`, `SIGINT`).
+pub(crate) fn take_sigterm() -> bool {
+    SIGTERM_RECEIVED.swap(false, Ordering::SeqCst)
+}
+
+/// Returns the TTY device name associated with `fd`, or None if not a terminal device.
+pub(crate) fn get_tty_name(fd: libc::c_int) -> Option<String> {
+    let ptr = unsafe { libc::ttyname(fd) };
+    if ptr.is_null() {
+        return None;
+    }
+    let c_str = unsafe { std::ffi::CStr::from_ptr(ptr) };
+    c_str.to_str().ok().map(|s| s.to_string())
 }
 
 /// OS adapter managing raw termios mode, `SIGWINCH` registration, and alternate screen buffer
@@ -38,13 +58,21 @@ impl OsHostTerminal {
             return Err(io::Error::last_os_error());
         }
 
-        // Install SIGWINCH handler
+        // Install SIGWINCH and graceful termination handlers (SIGTERM, SIGHUP, SIGINT)
         unsafe {
             let mut sa: libc::sigaction = std::mem::zeroed();
             sa.sa_sigaction = handle_sigwinch as *const () as usize;
             libc::sigemptyset(&mut sa.sa_mask);
             sa.sa_flags = libc::SA_RESTART;
             libc::sigaction(libc::SIGWINCH, &sa, std::ptr::null_mut());
+
+            let mut term_sa: libc::sigaction = std::mem::zeroed();
+            term_sa.sa_sigaction = handle_sigterm as *const () as usize;
+            libc::sigemptyset(&mut term_sa.sa_mask);
+            term_sa.sa_flags = libc::SA_RESTART;
+            libc::sigaction(libc::SIGTERM, &term_sa, std::ptr::null_mut());
+            libc::sigaction(libc::SIGHUP, &term_sa, std::ptr::null_mut());
+            libc::sigaction(libc::SIGINT, &term_sa, std::ptr::null_mut());
         }
 
         let mut host = Self {
