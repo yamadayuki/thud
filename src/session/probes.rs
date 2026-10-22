@@ -280,7 +280,7 @@ fn probe_battery() -> Option<String> {
         for token in text.split_whitespace() {
             let cleaned = token.trim_end_matches(';');
             if cleaned.ends_with('%') {
-                return Some(format!("BAT {cleaned}"));
+                return Some(cleaned.to_string());
             }
         }
         None
@@ -288,6 +288,6 @@ fn probe_battery() -> Option<String> {
     #[cfg(not(target_os = "macos"))]
     {
         let cap = fs::read_to_string("/sys/class/power_supply/BAT0/capacity").ok()?;
-        Some(format!("BAT {}%", cap.trim()))
+        Some(format!("{}%", cap.trim()))
     }
 }

@@ -121,7 +121,7 @@ impl Config {
              #   3. { type = \"active_command\", min_secs = 2 }\n\
              #      -> Foreground process name & elapsed timer when running >= min_secs (e.g. \"⚙ cargo (5s)\")\n\
              #   4. { type = \"battery\" }\n\
-             #      -> System battery level (e.g. \"BAT 100%\")\n\
+             #      -> System battery level (e.g. \"100%\")\n\
              #   5. { type = \"clock\", format = \"%Y-%m-%d %H:%M:%S\" }\n\
              #      -> Local time formatted with strftime syntax (default: \"%H:%M:%S\")\n\
              #   6. { type = \"text\", text = \"PROD\" }\n\
