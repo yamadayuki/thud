@@ -21,7 +21,7 @@ It wraps any interactive shell (`fish`, `zsh`, `bash`, `nu`, etc.) inside a tran
 ### 1. Docked Status Bar & Native Transparency
 - Reserves bottom rows via `TIOCSWINSZ` so your shell and full-screen TUI apps (`vim`, `nvim`, `less`, `fzf`) naturally size themselves above the status bar.
 - **Native Terminal Transparency & RGBA Blending**: Built-in themes default `bar_bg = "transparent"` so terminal emulator window opacity and blur (Ghostty `background-opacity`, WezTerm, Kitty) shine right through. Any color also supports `#rrggbbaa` or `@<opacity>` (`"#24283b@75%"`, `"blue@50%"`) for in-buffer RGB alpha blending.
-- **6 Built-in Themes + Full Palette Customization**: `"tokyo_night"` (default), `"catppuccin"`, `"cyberpunk"`, `"nord"`, `"gruvbox"`, and `"default"`, with per-color overrides via `[theme]`.
+- **7 Built-in Themes + Full Palette Customization**: `"tokyo_night"` (default), `"catppuccin"`, `"cyberpunk"`, `"nord"`, `"gruvbox"`, `"github_dark"`, and `"default"`, with per-color overrides via `[theme]`.
 
 ### 2. Non-Destructive Floating Overlays & Smart Collision Avoidance
 - **Anchor anywhere**: `top_right`, `top_left`, `top_center`, `bottom_right`, `bottom_left`, `bottom_center`.

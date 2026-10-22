@@ -71,8 +71,9 @@ Every color field (`fg`, `bg`, `border_fg`, `title_fg`, `track_fg`, and `[theme]
 ## 4. Themes & Palette Overrides
 
 ### Using a Built-in Preset
-Set `theme` at the top of `config.toml` to one of the 6 built-in presets:
+Set `theme` at the top of `config.toml` to one of the 7 built-in presets:
 - `"tokyo_night"` *(default)*
+- `"github_dark"`
 - `"catppuccin"`
 - `"cyberpunk"`
 - `"nord"`

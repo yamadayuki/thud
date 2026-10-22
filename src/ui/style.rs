@@ -268,6 +268,8 @@ pub enum ThemePreset {
     Cyberpunk,
     Nord,
     Gruvbox,
+    #[serde(rename = "github_dark")]
+    GitHubDark,
 }
 
 /// Resolved palette for a `ThemePreset` or customized `ThemeConfig`.
@@ -366,6 +368,19 @@ impl ThemePreset {
                 git_accent: (Color::Rgb(40, 40, 40), Color::Rgb(184, 187, 38)),
                 cmd_accent: (Color::Rgb(40, 40, 40), Color::Rgb(254, 128, 25)),
                 metric_accent: (Color::Rgb(250, 189, 47), Color::Rgb(60, 56, 54)),
+            },
+            ThemePreset::GitHubDark => ThemePalette {
+                bar_fg: Color::Rgb(201, 209, 217),
+                bar_bg: Color::Default,
+                overlay_fg: Color::Rgb(201, 209, 217),
+                overlay_bg: Color::Rgb(22, 27, 34),
+                border_fg: Color::Rgb(48, 54, 61),
+                title_fg: Color::Rgb(88, 166, 255),
+                track_fg: Color::Rgb(72, 79, 88),
+                cwd_accent: (Color::Rgb(13, 17, 23), Color::Rgb(88, 166, 255)),
+                git_accent: (Color::Rgb(13, 17, 23), Color::Rgb(63, 185, 80)),
+                cmd_accent: (Color::Rgb(13, 17, 23), Color::Rgb(240, 136, 62)),
+                metric_accent: (Color::Rgb(188, 140, 255), Color::Rgb(22, 27, 34)),
             },
         }
     }

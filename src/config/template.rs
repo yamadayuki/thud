@@ -18,7 +18,7 @@ impl Config {
              # Default path: ~/.config/thud/config.toml (or override via $THUD_CONFIG / --config)\n\
              # =============================================================================\n\n\
              # Color Theme Preset or Custom Theme Table:\n\
-             #   \"default\" | \"tokyo_night\" | \"catppuccin\" | \"cyberpunk\" | \"nord\" | \"gruvbox\"\n\
+             #   \"default\" | \"tokyo_night\" | \"catppuccin\" | \"cyberpunk\" | \"nord\" | \"gruvbox\" | \"github_dark\"\n\
              # Or customize any preset color inline or via `[theme]`:\n\
              #   theme = { preset = \"tokyo_night\", bar_bg = \"transparent\", overlay_bg = \"#24283b@0.8\", cwd_bg = \"#7aa2f7\" }\n\
              # Available theme override keys:\n\

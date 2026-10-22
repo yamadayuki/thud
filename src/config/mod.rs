@@ -699,6 +699,10 @@ mod tests {
             Config::from_toml(&custom_cfg.to_annotated_toml()).unwrap(),
             custom_cfg
         );
+
+        let gh_cfg = Config::from_toml("theme = \"github_dark\"").expect("valid github_dark theme");
+        assert_eq!(gh_cfg.theme.preset, ThemePreset::GitHubDark);
+        assert_eq!(gh_cfg.theme.palette().title_fg, Color::Rgb(88, 166, 255));
     }
 
     #[test]
