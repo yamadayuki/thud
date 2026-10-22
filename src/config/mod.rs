@@ -223,11 +223,20 @@ fn default_status_height() -> u16 {
 }
 
 fn default_separator() -> String {
-    " │ ".to_string()
+    String::new()
 }
 
 impl Default for StatusBarConfig {
     fn default() -> Self {
+        let padded_bold = SegmentFormat {
+            padding: Some(true),
+            bold: Some(true),
+            ..SegmentFormat::default()
+        };
+        let padded = SegmentFormat {
+            padding: Some(true),
+            ..SegmentFormat::default()
+        };
         Self {
             enabled: true,
             height: 1,
@@ -235,21 +244,48 @@ impl Default for StatusBarConfig {
             fg: None,
             bg: None,
             left: vec![
-                WidgetSpec::new(WidgetKind::Cwd),
-                WidgetSpec::new(WidgetKind::GitBranch),
-                WidgetSpec::new(WidgetKind::ActiveCommand { min_secs: 2 }),
-                WidgetSpec::new(WidgetKind::IpcSlot {
-                    key: "status".to_string(),
-                }),
+                WidgetSpec {
+                    kind: WidgetKind::Cwd,
+                    style: padded_bold.clone(),
+                },
+                WidgetSpec {
+                    kind: WidgetKind::GitBranch,
+                    style: padded_bold.clone(),
+                },
+                WidgetSpec {
+                    kind: WidgetKind::ActiveCommand { min_secs: 2 },
+                    style: padded_bold.clone(),
+                },
+                WidgetSpec {
+                    kind: WidgetKind::IpcSlot {
+                        key: "status".to_string(),
+                    },
+                    style: padded_bold,
+                },
             ],
             center: vec![],
-            right: vec![WidgetSpec::new(WidgetKind::Gauge {
-                key: "battery".to_string(),
-                width: 6,
-                label: None,
-                cmd: None,
-                interval_ms: None,
-            })],
+            right: vec![
+                WidgetSpec {
+                    kind: WidgetKind::Sparkline {
+                        key: "cpu".to_string(),
+                        width: 8,
+                        label: Some("CPU".to_string()),
+                        cmd: None,
+                        interval_ms: None,
+                    },
+                    style: padded.clone(),
+                },
+                WidgetSpec {
+                    kind: WidgetKind::Gauge {
+                        key: "battery".to_string(),
+                        width: 6,
+                        label: None,
+                        cmd: None,
+                        interval_ms: None,
+                    },
+                    style: padded,
+                },
+            ],
         }
     }
 }
@@ -336,7 +372,7 @@ impl Default for ToastConfig {
 /// Top-level declarative configuration for a `thud` session.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Config {
-    #[serde(default)]
+    #[serde(default = "default_theme")]
     pub theme: ThemeConfig,
     #[serde(default)]
     pub shell: Option<String>,
@@ -352,6 +388,10 @@ pub struct Config {
     pub toast: ToastConfig,
     #[serde(default = "default_overlays")]
     pub overlays: Vec<OverlayConfig>,
+}
+
+fn default_theme() -> ThemeConfig {
+    ThemeConfig::from_preset(ThemePreset::TokyoNight)
 }
 
 fn default_zen_toggle_key() -> Option<String> {
@@ -392,7 +432,7 @@ fn default_overlays() -> Vec<OverlayConfig> {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            theme: ThemeConfig::default(),
+            theme: default_theme(),
             shell: None,
             ipc_socket: None,
             zen_toggle_key: default_zen_toggle_key(),

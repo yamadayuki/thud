@@ -187,9 +187,41 @@ fn toml_quote(val: &str) -> String {
 }
 
 fn format_inline_value<T: serde::Serialize>(val: &T) -> String {
+    const PRIORITY_KEYS: &[&str] = &[
+        "type",
+        "preset",
+        "id",
+        "key",
+        "cmd",
+        "trigger",
+        "when_files",
+        "text",
+        "format",
+        "width",
+        "label",
+        "min_secs",
+        "interval_ms",
+        "icon",
+        "fg",
+        "bg",
+        "track_fg",
+        "bold",
+        "pill",
+        "padding",
+        "prefix",
+        "suffix",
+    ];
     match toml::Value::try_from(val) {
-        Ok(toml::Value::Table(map)) => {
-            let fields: Vec<String> = map.into_iter().map(|(k, v)| format!("{k} = {v}")).collect();
+        Ok(toml::Value::Table(mut map)) => {
+            let mut fields: Vec<String> = Vec::with_capacity(map.len());
+            for &pk in PRIORITY_KEYS {
+                if let Some(v) = map.remove(pk) {
+                    fields.push(format!("{pk} = {v}"));
+                }
+            }
+            for (k, v) in map {
+                fields.push(format!("{k} = {v}"));
+            }
             format!("{{ {} }}", fields.join(", "))
         }
         Ok(other) => other.to_string(),
