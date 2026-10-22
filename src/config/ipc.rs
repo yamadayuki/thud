@@ -13,13 +13,13 @@ pub enum ToastLevel {
 }
 
 impl ToastLevel {
-    /// Returns `(fg_ansi, bg_ansi, icon_prefix)` for this toast level.
-    pub fn palette(self) -> (u8, u8, &'static str) {
+    /// Returns the icon prefix for this toast level. Colors come from the theme palette.
+    pub fn icon(self) -> &'static str {
         match self {
-            ToastLevel::Info => (231, 24, "ℹ "),
-            ToastLevel::Success => (231, 28, "✓ "),
-            ToastLevel::Warn => (232, 214, "⚠ "),
-            ToastLevel::Error => (231, 160, "✗ "),
+            ToastLevel::Info => "ℹ ",
+            ToastLevel::Success => "✓ ",
+            ToastLevel::Warn => "⚠ ",
+            ToastLevel::Error => "✗ ",
         }
     }
 }

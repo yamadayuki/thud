@@ -112,6 +112,11 @@ git_bg = "#bb9af7@70%"
 | `git_fg` / `git_bg` | Automatic foreground/background capsule accent for `type = "git_branch"` widgets. |
 | `cmd_fg` / `cmd_bg` | Automatic foreground/background capsule accent for `type = "active_command"` and `type = "ipc_slot"` widgets. |
 | `metric_fg` / `metric_bg` | Automatic foreground/background capsule accent for `type = "sparkline"` and `type = "gauge"` widgets. |
+| `toast_info_fg` / `toast_info_bg` | Colors of `info` toasts (`thud toast ... --level info`). |
+| `toast_success_fg` / `toast_success_bg` | Colors of `success` toasts. |
+| `toast_warn_fg` / `toast_warn_bg` | Colors of `warn` toasts. |
+| `toast_error_fg` / `toast_error_bg` | Colors of `error` toasts (also used when a live config reload fails). |
+| `progress_fg` / `progress_bg` | Colors of ad-hoc progress gauges (`thud progress`) shown in the toast stack. |
 
 ---
 
@@ -271,6 +276,7 @@ margin_y = 1
 gap = 0
 pill = false
 border = "none"
+collision = { mode = "dodge_to_opposite_corner", margin = 1, avoid_text = false }
 ```
 
 | Key | Type | Default | Description |
@@ -281,6 +287,9 @@ border = "none"
 | `gap` | `u16` | `0` | Vertical spacing (in rows) between multiple stacked toasts. |
 | `pill` | `bool` | `false` | Wrap each toast in Nerd Font rounded caps (`\u{e0b6}` / `\u{e0b4}`). |
 | `border` | `BorderStyle` | `"none"` | Box border around each toast (`"none"`, `"single"`, `"rounded"`, `"double"`). |
+| `collision` | `CollisionPolicy` | `{ mode = "dodge_to_opposite_corner", margin = 1, avoid_text = false }` | How the whole stack avoids the cursor, using the same modes as overlays (`"ignore"`, `"auto_hide"`, `"dodge_to_opposite_corner"`). With the default `avoid_text = false`, notifications move away from the cursor but never disappear because of text underneath. |
+
+Toast and progress colors come from the active theme (see the `toast_*` and `progress_*` keys in the `[theme]` table).
 
 ---
 

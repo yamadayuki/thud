@@ -3,7 +3,7 @@ type: Architecture
 title: "Deep Compositor & Session Module Architecture"
 description: Two-tier deep module design pairing a deterministic Sans-I/O Compositor core with a declarative Session runner.
 tags: [architecture, codebase-design, compositor, seam, sans-io]
-generated: { by: claude-code/claude-opus-5-5, at: "2026-10-22T22:33:57Z" }
+generated: { by: claude-code/claude-opus-5-5, at: "2026-10-22T22:38:46Z" }
 status: stable
 ---
 
@@ -30,10 +30,11 @@ flowchart TB
 
     subgraph CompositorModule["Module: src/compositor/ (Sans-I/O Deep Core Seam)"]
         Step["mod.rs: Compositor::new / step(Event, Instant) -> Transition"]
-        Store["store.rs: TelemetryStore (TTL Slots, Metrics, Toasts, ActiveCmd)"]
+        Store["store.rs: TelemetryStore (private state + read queries)"]
+        Painter["painter.rs: HudPainter (status bar, overlays, toast stack, widget evaluation, theme)"]
         Sched["scheduler.rs: CommandScheduler (triggers, when_files, in-flight, outputs)"]
         VTE["vt.rs: VtScreenAdapter & Terminal Query Responder"]
-        Layout["layout.rs: PlacementSolver (Anchor & Text/Cursor Dodge)"]
+        Layout["layout.rs: PlacementSolver (Overlays & Toast Stack, Text/Cursor Dodge)"]
     end
 
     subgraph UiModule["Module: src/ui/ (Ratatui-Style 2D Cell Rendering Seam)"]
@@ -53,7 +54,10 @@ flowchart TB
     Step --> Sched
     Step --> VTE
     Step --> Layout
-    Step --> Widgets
+    Step --> Painter
+    Painter --> Store
+    Painter --> Layout
+    Painter --> Widgets
     Widgets --> Surface
     Primitives --> Surface
 ```
@@ -79,10 +83,11 @@ flowchart TB
   - `Compositor::render(&mut self, now: Instant) -> Option<Vec<u8>>`
   - `Compositor::is_dirty(&self) -> bool`
 - **Internal Submodules**:
-  - `store.rs` (`TelemetryStore`): Manages ephemeral IPC slots, metric ring buffers, stacked toast notifications, dynamic overlays, and foreground command timers.
+  - `store.rs` (`TelemetryStore`, ADR-007): Holds ephemeral IPC slots, metric ring buffers, stacked toast notifications, dynamic overlays, builtin values, and the foreground command timer behind private fields; mutated only via `on_tick` / `apply_ipc` / `push_metric` and read through queries. It renders nothing.
+  - `painter.rs` (`HudPainter`, ADR-007): Paints the status bar, overlays (sorted by `z_index`), and toast stack over the projected child screen; evaluates each `WidgetSpec` into styled `Line`s and resolves theme colors, including themed toast and progress colors. A single `effective_widgets` walk (config + dynamic overlays) serves `HudPainter`, `CommandScheduler`, and `watched_markers`.
   - `scheduler.rs` (`CommandScheduler`, ADR-005): Decides when `command` widgets and metric `cmd`s are due (`interval` / `cwd` / `change` triggers, `when_files` markers reported through `BuiltinValues::found_markers`), never re-dispatches a command still in flight, keeps the previous output when a run fails, re-runs only changed specs after reload, and keys commands with the typed `CommandKey` (`Widget(id)` / `Metric(key)`). `Compositor::watched_markers` exposes the marker names to resolve.
   - `vt.rs` (`VtScreenAdapter`): Wraps `vt100::Parser` (Primary/Alternate screen), copies virtual terminal cells into `Buffer`, and synthesizes replies to terminal queries (`DA1`, `DA2`, `DSR 5/6`, `XTVERSION`, Kitty keyboard, `OSC 10/11`).
-  - `layout.rs` (`PlacementSolver`): Computes child PTY viewport size and resolves floating overlay bounding-box positions with cursor and non-whitespace text collision dodging (`Ignore`, `AutoHide`, `DodgeToOppositeCorner`).
+  - `layout.rs` (`PlacementSolver`): Computes child PTY viewport size, resolves floating overlay bounding-box positions with cursor and non-whitespace text collision dodging (`Ignore`, `AutoHide`, `DodgeToOppositeCorner`), and places the toast stack as one box under `[toast].collision`.
 - **Decoupled Ingestion & Pacing**:
   - Byte ingestion (`Event::PtyOutput`) updates virtual screen state and sets a dirty flag immediately without triggering frame rendering.
   - Frame composition (`render`) is paced by the session loop at ~144 FPS (6.9ms interval), while interactive host keystrokes (`Event::HostInput`) trigger an immediate 0ms flush.
