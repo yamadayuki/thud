@@ -242,7 +242,45 @@ fn e2e_outer_pty_interactive_input_status_bar_ipc_and_clean_exit() {
         term.vt.screen().contents()
     );
 
-    // 3. Test dynamic window resize (SIGWINCH) from 80x24 -> 100x30
+    // 3. Test stacked toasts, progress bar IPC, and Zen Mode hotkey (Ctrl+\ = 0x1c)
+    let hud_cmd = format!(
+        "{bin_path} toast FIRST_TOAST --level info && {bin_path} toast SECOND_TOAST --level success && {bin_path} progress deploy 50 --label Deploying\r"
+    );
+    term.send_keys(hud_cmd.as_bytes()).unwrap();
+    assert!(
+        term.pump_until(Duration::from_secs(3), |screen| {
+            let contents = screen.contents();
+            contents.contains("ℹ FIRST_TOAST")
+                && contents.contains("✓ SECOND_TOAST")
+                && contents.contains("Deploying ━━━━━───── 50%")
+        }),
+        "stacked toasts or progress bar failed to render; screen:\n{}",
+        term.vt.screen().contents()
+    );
+
+    // Toggle Zen Mode ON via Ctrl+\ (0x1c) -> status bar, toasts, and gauge hide
+    term.send_keys(b"\x1c").unwrap();
+    assert!(
+        term.pump_until(Duration::from_secs(2), |screen| {
+            let contents = screen.contents();
+            !contents.contains("✓ SECOND_TOAST")
+                && !contents.contains("Deploying ━━━━━───── 50%")
+        }),
+        "Zen Mode failed to hide HUD overlays; screen:\n{}",
+        term.vt.screen().contents()
+    );
+
+    // Toggle Zen Mode OFF via Ctrl+\ (0x1c) -> HUD restores
+    term.send_keys(b"\x1c").unwrap();
+    assert!(
+        term.pump_until(Duration::from_secs(2), |screen| {
+            screen.contents().contains("Deploying ━━━━━───── 50%")
+        }),
+        "Zen Mode toggle off failed to restore HUD; screen:\n{}",
+        term.vt.screen().contents()
+    );
+
+    // 4. Test dynamic window resize (SIGWINCH) from 80x24 -> 100x30
     term.resize(100, 30).unwrap();
     assert!(
         term.pump_until(Duration::from_secs(2), |_| true),

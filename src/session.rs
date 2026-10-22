@@ -134,7 +134,7 @@ impl Session {
             let loop_now = Instant::now();
 
             if poll_res > 0 {
-                // 1. Forward host terminal keystrokes to child PTY
+                // 1. Route host terminal keystrokes through Compositor (handles hotkeys + forwards input)
                 if (fds[0].revents & libc::POLLIN) != 0 {
                     let n = unsafe {
                         libc::read(
@@ -144,7 +144,8 @@ impl Session {
                         )
                     };
                     if n > 0 {
-                        pty.write_all(&buf[..n as usize])?;
+                        let tx = compositor.step(Event::HostInput(&buf[..n as usize]), loop_now);
+                        Self::apply_os_transition(&tx, &mut host, &mut pty, &cmd_tx)?;
                     }
                 }
 
@@ -671,6 +672,11 @@ fn probe_builtins(
     let raw_cwd = read_process_cwd(fg_pid).or_else(|| read_process_cwd(child_pid));
     let git_branch = raw_cwd.as_deref().and_then(resolve_git_branch);
     let cwd = raw_cwd.map(|p| shorten_home(&p));
+    let fg_process = if fg_pid != child_pid {
+        read_process_name(fg_pid)
+    } else {
+        None
+    };
 
     let should_refresh_battery = last_battery_probe
         .is_none_or(|last| now.saturating_duration_since(last) >= Duration::from_secs(30));
@@ -683,6 +689,43 @@ fn probe_builtins(
         cwd,
         git_branch,
         battery: cached_battery.clone(),
+        fg_process,
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn read_process_name(pid: libc::pid_t) -> Option<String> {
+    unsafe extern "C" {
+        fn proc_name(pid: libc::c_int, buffer: *mut libc::c_void, buffersize: u32) -> libc::c_int;
+    }
+    let mut buf = [0u8; 256];
+    let ret = unsafe {
+        proc_name(
+            pid,
+            buf.as_mut_ptr() as *mut libc::c_void,
+            buf.len() as u32,
+        )
+    };
+    if ret <= 0 {
+        return None;
+    }
+    let len = (ret as usize).min(buf.len());
+    let name = std::str::from_utf8(&buf[..len]).ok()?.trim_matches('\0').trim();
+    if name.is_empty() {
+        None
+    } else {
+        Some(name.to_string())
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn read_process_name(pid: libc::pid_t) -> Option<String> {
+    let comm = fs::read_to_string(format!("/proc/{pid}/comm")).ok()?;
+    let trimmed = comm.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
     }
 }
 
@@ -849,6 +892,7 @@ mod tests {
                     cwd: Some("~/cth".to_string()),
                     git_branch: Some("git:main".to_string()),
                     battery: None,
+                    fg_process: None,
                 },
             )
             .feed_pty_output(b"\x1b[?1049h\x1b[1;1H-- VIM BUFFER --")

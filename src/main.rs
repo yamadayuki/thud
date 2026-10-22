@@ -1,7 +1,4 @@
-use cth::{
-    Anchor, CollisionPolicy, Config, IpcMessage, OverlayConfig, ScreenCondition, Session,
-    SessionError, WidgetSpec,
-};
+use cth::{Config, IpcMessage, Session, SessionError, ToastLevel};
 use std::path::PathBuf;
 
 fn main() {
@@ -28,8 +25,15 @@ fn try_main() -> Result<(), SessionError> {
             }
             let key = args[1].clone();
             let value = args[2].clone();
-            let (ttl_ms, socket) = parse_ipc_flags(&args[3..])?;
-            Session::send_ipc_message(socket, &IpcMessage::SetSlot { key, value, ttl_ms })
+            let flags = parse_ipc_flags(&args[3..])?;
+            Session::send_ipc_message(
+                flags.socket,
+                &IpcMessage::SetSlot {
+                    key,
+                    value,
+                    ttl_ms: flags.ttl_ms,
+                },
+            )
         }
         Some("clear") => {
             if args.len() < 2 {
@@ -38,40 +42,57 @@ fn try_main() -> Result<(), SessionError> {
                 ));
             }
             let key = args[1].clone();
-            let (_, socket) = parse_ipc_flags(&args[2..])?;
-            Session::send_ipc_message(socket, &IpcMessage::ClearSlot { key })
+            let flags = parse_ipc_flags(&args[2..])?;
+            Session::send_ipc_message(flags.socket, &IpcMessage::ClearSlot { key })
         }
-        Some("toast") => {
-            // Usage: cth toast <message> [--ttl-ms <ms>] [--socket <path>]
-            if args.len() < 2 {
+        Some("progress" | "metric") => {
+            // Usage: cth progress <key> <0..100|done> [--label <text>] [--ttl-ms <ms>] [--socket <path>]
+            if args.len() < 3 {
                 return Err(SessionError::Ipc(
-                    "usage: cth toast <message> [--ttl-ms <ms>] [--socket <path>]".to_string(),
+                    "usage: cth progress <key> <0..100|done> [--label <text>] [--ttl-ms <ms>]"
+                        .to_string(),
                 ));
             }
-            let text = format!(" {} ", args[1]);
-            let (ttl_ms, socket) = parse_ipc_flags(&args[2..])?;
-            let overlay = OverlayConfig {
-                id: "toast".to_string(),
-                anchor: Anchor::BottomRight,
-                offset_x: 0,
-                offset_y: 0,
-                z_index: 50,
-                screen_mode: ScreenCondition::Always,
-                collision: CollisionPolicy::AutoHide {
-                    margin: 1,
-                    avoid_text: false,
+            let key = args[1].clone();
+            let flags = parse_ipc_flags(&args[3..])?;
+            if args[2] == "done" || args[2] == "clear" {
+                return Session::send_ipc_message(flags.socket, &IpcMessage::ClearSlot { key });
+            }
+            let value = args[2]
+                .parse::<u8>()
+                .map_err(|e| SessionError::Ipc(format!("invalid percentage '{}': {e}", args[2])))?;
+            Session::send_ipc_message(
+                flags.socket,
+                &IpcMessage::PushMetric {
+                    key,
+                    value,
+                    label: flags.label,
+                    ttl_ms: flags.ttl_ms,
                 },
-                fg_ansi: 15,
-                bg_ansi: 24,
-                bold: true,
-                widget: WidgetSpec::Text { text },
-                ttl_ms: Some(ttl_ms.unwrap_or(4000)),
-            };
-            Session::send_ipc_message(socket, &IpcMessage::UpsertOverlay { overlay })
+            )
+        }
+        Some("toast") => {
+            // Usage: cth toast <message> [--level info|success|warn|error] [--ttl-ms <ms>] [--socket <path>]
+            if args.len() < 2 {
+                return Err(SessionError::Ipc(
+                    "usage: cth toast <message> [--level info|success|warn|error] [--ttl-ms <ms>]"
+                        .to_string(),
+                ));
+            }
+            let message = args[1].clone();
+            let flags = parse_ipc_flags(&args[2..])?;
+            Session::send_ipc_message(
+                flags.socket,
+                &IpcMessage::Toast {
+                    message,
+                    level: flags.level.unwrap_or(ToastLevel::Info),
+                    ttl_ms: flags.ttl_ms.unwrap_or(4000),
+                },
+            )
         }
         Some("quit" | "exit") => {
-            let (_, socket) = parse_ipc_flags(&args[1..])?;
-            Session::send_ipc_message(socket, &IpcMessage::Quit)
+            let flags = parse_ipc_flags(&args[1..])?;
+            Session::send_ipc_message(flags.socket, &IpcMessage::Quit)
         }
         Some("init-config") => {
             let (output_path, force) = parse_init_config_flags(&args[1..]);
@@ -135,16 +156,23 @@ fn parse_run_config(args: &[String]) -> Result<Config, SessionError> {
     Ok(cfg)
 }
 
-fn parse_ipc_flags(args: &[String]) -> Result<(Option<u64>, Option<PathBuf>), SessionError> {
-    let mut ttl_ms = None;
-    let mut socket = None;
+#[derive(Default)]
+struct IpcFlags {
+    ttl_ms: Option<u64>,
+    socket: Option<PathBuf>,
+    label: Option<String>,
+    level: Option<ToastLevel>,
+}
+
+fn parse_ipc_flags(args: &[String]) -> Result<IpcFlags, SessionError> {
+    let mut flags = IpcFlags::default();
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
             "--ttl-ms" => {
                 i += 1;
                 if let Some(v) = args.get(i) {
-                    ttl_ms = Some(
+                    flags.ttl_ms = Some(
                         v.parse::<u64>()
                             .map_err(|e| SessionError::Ipc(format!("invalid --ttl-ms: {e}")))?,
                     );
@@ -153,14 +181,36 @@ fn parse_ipc_flags(args: &[String]) -> Result<(Option<u64>, Option<PathBuf>), Se
             "--socket" => {
                 i += 1;
                 if let Some(p) = args.get(i) {
-                    socket = Some(PathBuf::from(p));
+                    flags.socket = Some(PathBuf::from(p));
+                }
+            }
+            "--label" | "-l" => {
+                i += 1;
+                if let Some(lbl) = args.get(i) {
+                    flags.label = Some(lbl.clone());
+                }
+            }
+            "--level" => {
+                i += 1;
+                if let Some(lvl) = args.get(i) {
+                    flags.level = Some(match lvl.as_str() {
+                        "info" => ToastLevel::Info,
+                        "success" | "ok" => ToastLevel::Success,
+                        "warn" | "warning" => ToastLevel::Warn,
+                        "error" | "err" => ToastLevel::Error,
+                        other => {
+                            return Err(SessionError::Ipc(format!(
+                                "invalid --level '{other}' (expected info|success|warn|error)"
+                            )));
+                        }
+                    });
                 }
             }
             _ => {}
         }
         i += 1;
     }
-    Ok((ttl_ms, socket))
+    Ok(flags)
 }
 
 fn parse_init_config_flags(args: &[String]) -> (Option<PathBuf>, bool) {
@@ -194,12 +244,13 @@ fn print_help() {
 cth - Terminal-emulator-agnostic & shell-agnostic HUD compositor
 
 USAGE:
-  cth [run] [--config <path>] [--shell <shell>]   Start interactive terminal HUD session
-  cth init-config [--output <path>] [--force]     Write annotated config file (default: ~/.config/cth/config.toml)
-  cth print-default-config                        Print annotated default TOML configuration to stdout
-  cth set <key> <value> [--ttl-ms <ms>]           Update an IPC status slot in the active session
-  cth clear <key>                                 Clear an IPC status slot
-  cth toast <message> [--ttl-ms <ms>]             Show a floating toast notification overlay
-  cth quit                                        Gracefully exit the active cth session"
+  cth [run] [--config <path>] [--shell <shell>]             Start interactive terminal HUD session
+  cth init-config [--output <path>] [--force]               Write annotated config file (~/.config/cth/config.toml)
+  cth print-default-config                                  Print annotated default TOML configuration
+  cth set <key> <value> [--ttl-ms <ms>]                     Update an IPC status slot
+  cth clear <key>                                           Clear an IPC status slot or metric
+  cth progress <key> <0..100|done> [--label <txt>]          Push progress/metric for gauge or sparkline widgets
+  cth toast <msg> [--level info|success|warn|error]         Enqueue a stacked toast notification overlay
+  cth quit                                                  Gracefully exit the active cth session"
     );
 }
