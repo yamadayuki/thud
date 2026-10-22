@@ -12,14 +12,14 @@ fn try_main() -> Result<(), SessionError> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
         None | Some("run") => {
-            let config = parse_run_config(&args)?;
-            let code = Session::run(config)?;
+            let (config, config_path) = parse_run_config(&args)?;
+            let code = Session::run(config, config_path)?;
             std::process::exit(code);
         }
         Some("set") => {
             // Usage: thud set <key> <value> [--ttl-ms <ms>] [--socket <path>]
             if args.len() < 3 {
-                return Err(SessionError::Ipc(
+                return Err(SessionError::Usage(
                     "usage: thud set <key> <value> [--ttl-ms <ms>] [--socket <path>]".to_string(),
                 ));
             }
@@ -37,7 +37,7 @@ fn try_main() -> Result<(), SessionError> {
         }
         Some("clear") => {
             if args.len() < 2 {
-                return Err(SessionError::Ipc(
+                return Err(SessionError::Usage(
                     "usage: thud clear <key> [--socket <path>]".to_string(),
                 ));
             }
@@ -48,7 +48,7 @@ fn try_main() -> Result<(), SessionError> {
         Some("progress" | "metric") => {
             // Usage: thud progress <key> <0..100|done> [--label <text>] [--ttl-ms <ms>] [--socket <path>]
             if args.len() < 3 {
-                return Err(SessionError::Ipc(
+                return Err(SessionError::Usage(
                     "usage: thud progress <key> <0..100|done> [--label <text>] [--ttl-ms <ms>]"
                         .to_string(),
                 ));
@@ -58,9 +58,9 @@ fn try_main() -> Result<(), SessionError> {
             if args[2] == "done" || args[2] == "clear" {
                 return Session::send_ipc_message(flags.socket, &IpcMessage::ClearSlot { key });
             }
-            let value = args[2]
-                .parse::<u8>()
-                .map_err(|e| SessionError::Ipc(format!("invalid percentage '{}': {e}", args[2])))?;
+            let value = args[2].parse::<u8>().map_err(|e| {
+                SessionError::Usage(format!("invalid percentage '{}': {e}", args[2]))
+            })?;
             Session::send_ipc_message(
                 flags.socket,
                 &IpcMessage::PushMetric {
@@ -74,7 +74,7 @@ fn try_main() -> Result<(), SessionError> {
         Some("toast") => {
             // Usage: thud toast <message> [--level info|success|warn|error] [--ttl-ms <ms>] [--socket <path>]
             if args.len() < 2 {
-                return Err(SessionError::Ipc(
+                return Err(SessionError::Usage(
                     "usage: thud toast <message> [--level info|success|warn|error] [--ttl-ms <ms>]"
                         .to_string(),
                 ));
@@ -98,16 +98,8 @@ fn try_main() -> Result<(), SessionError> {
             let flags = parse_ipc_flags(&args[1..])?;
             match Session::send_ipc_message(flags.socket, &IpcMessage::Quit) {
                 Ok(()) => Ok(()),
-                Err(SessionError::Ipc(msg))
-                    if msg.contains("no active thud session reachable")
-                        || msg.contains("THUD_SOCKET is not set") =>
-                {
-                    unsafe {
-                        std::env::remove_var("THUD_ACTIVE");
-                        std::env::remove_var("THUD_SOCKET");
-                        std::env::remove_var("THUD_TTY");
-                    }
-                    println!("No active thud session is running. Cleaned up environment.");
+                Err(SessionError::NoActiveSession { .. }) => {
+                    println!("No active thud session is running.");
                     Ok(())
                 }
                 Err(err) => Err(err),
@@ -131,17 +123,19 @@ fn try_main() -> Result<(), SessionError> {
             Ok(())
         }
         Some(flag) if flag.starts_with('-') => {
-            let config = parse_run_config(&args)?;
-            let code = Session::run(config)?;
+            let (config, config_path) = parse_run_config(&args)?;
+            let code = Session::run(config, config_path)?;
             std::process::exit(code);
         }
-        Some(other) => Err(SessionError::Ipc(format!(
+        Some(other) => Err(SessionError::Usage(format!(
             "unknown subcommand '{other}'. Run `thud --help` for usage."
         ))),
     }
 }
 
-fn parse_run_config(args: &[String]) -> Result<Config, SessionError> {
+/// Parses `thud [run]` flags into the startup config and the path live reloads should read
+/// (`None` for the default location).
+fn parse_run_config(args: &[String]) -> Result<(Config, Option<PathBuf>), SessionError> {
     let mut idx = 0;
     if args.first().map(String::as_str) == Some("run") {
         idx = 1;
@@ -172,13 +166,8 @@ fn parse_run_config(args: &[String]) -> Result<Config, SessionError> {
         idx += 1;
     }
 
-    let mut cfg = match config_path {
-        Some(p) => {
-            unsafe {
-                std::env::set_var("THUD_CONFIG", p.as_os_str());
-            }
-            Config::from_file(p)?
-        }
+    let mut cfg = match &config_path {
+        Some(p) => Config::from_file(p)?,
         None => Config::load_or_default()?,
     };
     if let Some(sh) = shell_override {
@@ -187,7 +176,7 @@ fn parse_run_config(args: &[String]) -> Result<Config, SessionError> {
     if force {
         cfg.force = true;
     }
-    Ok(cfg)
+    Ok((cfg, config_path))
 }
 
 #[derive(Default)]
@@ -208,7 +197,7 @@ fn parse_ipc_flags(args: &[String]) -> Result<IpcFlags, SessionError> {
                 if let Some(v) = args.get(i) {
                     flags.ttl_ms = Some(
                         v.parse::<u64>()
-                            .map_err(|e| SessionError::Ipc(format!("invalid --ttl-ms: {e}")))?,
+                            .map_err(|e| SessionError::Usage(format!("invalid --ttl-ms: {e}")))?,
                     );
                 }
             }
@@ -233,7 +222,7 @@ fn parse_ipc_flags(args: &[String]) -> Result<IpcFlags, SessionError> {
                         "warn" | "warning" => ToastLevel::Warn,
                         "error" | "err" => ToastLevel::Error,
                         other => {
-                            return Err(SessionError::Ipc(format!(
+                            return Err(SessionError::Usage(format!(
                                 "invalid --level '{other}' (expected info|success|warn|error)"
                             )));
                         }

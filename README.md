@@ -61,7 +61,7 @@ It wraps any interactive shell (`fish`, `zsh`, `bash`, `nu`, etc.) inside a tran
 - **0ms Keystroke Latency**: Interactive user typing immediately flushes rendered diffs to the outer terminal for zero interactive latency.
 - **Zero-Allocation Flat 2D Grid**: Screen buffer uses inline scalar `char` cells with double-buffering, eliminating heap allocations during continuous terminal rendering.
 - **Run-Length Cursor Tracking**: Minimizes ANSI Cursor Position (`CUP`) escapes across contiguous cells, reducing terminal diff byte size by 60–80%.
-- **Fail-Safe Session Lifecycle**: Live Unix domain socket checking and TTY identity tracking (`$THUD_TTY`) prevent accidental nested lockouts, auto-purge stale environment variables from terminated sessions, support `--force` / `-f` override, and guarantee idempotent `thud quit`.
+- **Fail-Safe Session Lifecycle**: Live Unix domain socket checking and TTY identity tracking (`$THUD_TTY`) prevent accidental nested lockouts, ignore variables left behind by terminated sessions, support `--force` / `-f` override, and guarantee idempotent `thud quit`.
 
 ---
 
@@ -157,7 +157,7 @@ thud reload
 | `thud clear <key>` | Clear an `ipc_slot`, `gauge`, or `sparkline` key. |
 | `thud progress <key> <0..100\|done> [--label <text>] [--ttl-ms <ms>]` | Push a percentage sample (`0..100`) to `gauge` and `sparkline` widgets (or pop up a floating progress bar). |
 | `thud toast <message> [--level info\|success\|warn\|error] [--ttl-ms <ms>]` | Display a floating toast notification. |
-| `thud quit` | Gracefully terminate the active `thud` session (idempotent: exits cleanly and purges stale session variables if no session is running). |
+| `thud quit` | Gracefully terminate the active `thud` session (idempotent: exits cleanly with code 0 if no session is running). |
 
 ---
 

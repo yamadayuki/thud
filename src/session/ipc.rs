@@ -1,5 +1,6 @@
 use crate::config::IpcMessage;
 use crate::session::SessionError;
+use crate::session::inherited::remove_socket_file;
 use std::fs;
 use std::io::{self, BufRead, BufReader, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
@@ -14,9 +15,7 @@ pub(crate) struct OsIpcServer {
 
 impl OsIpcServer {
     pub fn bind(path: &Path) -> io::Result<Self> {
-        if path.exists() {
-            let _ = fs::remove_file(path);
-        }
+        remove_socket_file(path)?;
         let listener = UnixListener::bind(path)?;
         listener.set_nonblocking(true)?;
         Ok(Self {
@@ -53,19 +52,12 @@ pub(crate) fn send_ipc_message(
 ) -> Result<(), SessionError> {
     let path = match socket_path.or_else(|| std::env::var("THUD_SOCKET").ok().map(PathBuf::from)) {
         Some(p) => p,
-        None => {
-            return Err(SessionError::Ipc(
-                "THUD_SOCKET is not set and no --socket path was provided".to_string(),
-            ));
-        }
+        None => return Err(SessionError::NoActiveSession { socket: None }),
     };
 
     let mut stream = UnixStream::connect(&path).map_err(|e| {
         if e.kind() == io::ErrorKind::NotFound || e.kind() == io::ErrorKind::ConnectionRefused {
-            SessionError::Ipc(format!(
-                "no active thud session reachable at {} ({e})",
-                path.display()
-            ))
+            SessionError::NoActiveSession { socket: Some(path) }
         } else {
             SessionError::Io(e)
         }

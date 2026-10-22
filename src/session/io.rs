@@ -9,6 +9,7 @@ use crate::session::tty::{self, OsHostTerminal};
 use chrono::{DateTime, Local};
 use std::collections::BTreeSet;
 use std::io;
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
@@ -75,14 +76,15 @@ pub(crate) struct OsSessionIo {
     probes: SystemProbes,
     cmd_tx: Sender<(CommandKey, Option<String>)>,
     cmd_rx: Receiver<(CommandKey, Option<String>)>,
+    config_path: Option<PathBuf>,
     config_mtime: Option<SystemTime>,
     host: OsHostTerminal,
 }
 
 impl OsSessionIo {
     /// Enters raw mode on the host terminal, binds the IPC socket, and spawns the child shell
-    /// sized for the HUD layout described by `config`.
-    pub fn start(config: &Config) -> Result<Self, SessionError> {
+    /// sized for the HUD layout described by `config`. Live reloads read `config_path`.
+    pub fn start(config: &Config, config_path: Option<PathBuf>) -> Result<Self, SessionError> {
         let host = OsHostTerminal::enter()?;
         let host_size = host.size()?;
 
@@ -100,21 +102,22 @@ impl OsSessionIo {
         let pty = OsChildPty::spawn(&shell, child_size, &socket_path)?;
 
         let (cmd_tx, cmd_rx) = mpsc::channel();
+        let config_mtime = modified_time(config_path.as_deref());
         Ok(Self {
             pty,
             ipc,
             probes: SystemProbes::new(),
             cmd_tx,
             cmd_rx,
-            config_mtime: current_config_mtime(),
+            config_path,
+            config_mtime,
             host,
         })
     }
 }
 
-fn current_config_mtime() -> Option<SystemTime> {
-    let path = Config::default_path()?;
-    std::fs::metadata(path).ok()?.modified().ok()
+fn modified_time(path: Option<&std::path::Path>) -> Option<SystemTime> {
+    std::fs::metadata(path?).ok()?.modified().ok()
 }
 
 fn read_fd(fd: libc::c_int, buf: &mut [u8]) -> usize {
@@ -231,11 +234,11 @@ impl SessionIo for OsSessionIo {
     }
 
     fn config_changed(&mut self) -> bool {
-        current_config_mtime() != self.config_mtime
+        modified_time(self.config_path.as_deref()) != self.config_mtime
     }
 
     fn load_config(&mut self) -> Result<Config, ConfigError> {
-        self.config_mtime = current_config_mtime();
-        Config::load_or_default()
+        self.config_mtime = modified_time(self.config_path.as_deref());
+        Config::load_from(self.config_path.as_deref())
     }
 }

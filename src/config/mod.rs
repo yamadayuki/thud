@@ -511,21 +511,15 @@ impl Config {
     /// Loads configuration from `$THUD_CONFIG` (if set) or `~/.config/thud/config.toml` if present,
     /// falling back to `Config::default()`.
     pub fn load_or_default() -> Result<Self, ConfigError> {
-        if let Ok(custom_path) = std::env::var("THUD_CONFIG")
-            && !custom_path.is_empty()
-        {
-            let p = PathBuf::from(custom_path);
-            if p.exists() {
-                return Self::from_file(p);
-            }
-            return Ok(Self::default());
+        Self::load_from(Self::default_path().as_deref())
+    }
+
+    /// Loads configuration from `path` if that file exists, falling back to `Config::default()`.
+    pub fn load_from(path: Option<&Path>) -> Result<Self, ConfigError> {
+        match path {
+            Some(p) if p.exists() => Self::from_file(p),
+            _ => Ok(Self::default()),
         }
-        if let Some(path) = Self::default_path()
-            && path.exists()
-        {
-            return Self::from_file(path);
-        }
-        Ok(Self::default())
     }
 
     /// Writes the annotated default configuration TOML to `target_path` (or `Self::default_path()`).
