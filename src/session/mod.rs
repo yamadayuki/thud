@@ -298,6 +298,7 @@ mod tests {
                     git_branch: Some("git:main".to_string()),
                     battery: None,
                     fg_process: None,
+                    cpu_usage: None,
                 },
             )
             .feed_pty_output(b"\x1b[?1049h\x1b[1;1H-- VIM BUFFER --")

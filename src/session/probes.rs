@@ -4,12 +4,14 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-/// Stateful OS telemetry collector that caches battery status and samples foreground process
-/// CWD, Git branch, and command name into `BuiltinValues`.
+/// Stateful OS telemetry collector that caches battery status, tracks CPU tick deltas,
+/// and samples foreground process CWD, Git branch, and command name into `BuiltinValues`.
 #[derive(Debug, Default)]
 pub(crate) struct SystemProbes {
     cached_battery: Option<String>,
     last_battery_probe: Option<Instant>,
+    prev_cpu_ticks: Option<[u64; 4]>,
+    last_cpu_probe: Option<Instant>,
 }
 
 impl SystemProbes {
@@ -18,7 +20,7 @@ impl SystemProbes {
     }
 
     /// Samples the child PTY's foreground process group for CWD, Git branch, foreground command,
-    /// and cached battery status.
+    /// cached battery status, and system CPU load percentage (`0..=100`).
     pub fn sample(
         &mut self,
         pty_master_fd: libc::c_int,
@@ -47,13 +49,93 @@ impl SystemProbes {
             self.cached_battery = probe_battery();
         }
 
+        let cpu_usage = self.sample_cpu(now);
+
         BuiltinValues {
             cwd,
             git_branch,
             battery: self.cached_battery.clone(),
             fg_process,
+            cpu_usage,
         }
     }
+
+    /// Samples system-wide CPU usage percentage at ~1s intervals (plus an initial baseline on frame 1).
+    fn sample_cpu(&mut self, now: Instant) -> Option<u8> {
+        let is_due = self
+            .last_cpu_probe
+            .is_none_or(|last| now.saturating_duration_since(last) >= Duration::from_millis(900));
+        if !is_due {
+            return None;
+        }
+        self.last_cpu_probe = Some(now);
+
+        let cur = read_cpu_ticks()?;
+        let pct = match self.prev_cpu_ticks {
+            Some(prev) => {
+                let d_user = cur[0].saturating_sub(prev[0]);
+                let d_sys = cur[1].saturating_sub(prev[1]);
+                let d_idle = cur[2].saturating_sub(prev[2]);
+                let d_nice = cur[3].saturating_sub(prev[3]);
+                let busy = d_user + d_sys + d_nice;
+                let total = busy + d_idle;
+                (busy * 100).checked_div(total).unwrap_or(0).min(100) as u8
+            }
+            None => 0,
+        };
+        self.prev_cpu_ticks = Some(cur);
+        Some(pct)
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn read_cpu_ticks() -> Option<[u64; 4]> {
+    const HOST_CPU_LOAD_INFO: libc::c_int = 3;
+    const HOST_CPU_LOAD_INFO_COUNT: u32 = 4;
+
+    #[repr(C)]
+    struct HostCpuLoadInfo {
+        cpu_ticks: [u32; 4],
+    }
+
+    unsafe extern "C" {
+        fn mach_host_self() -> u32;
+        fn host_statistics(
+            host_priv: u32,
+            flavor: libc::c_int,
+            host_info_out: *mut HostCpuLoadInfo,
+            host_info_out_cnt: *mut u32,
+        ) -> libc::c_int;
+    }
+
+    let mut info = HostCpuLoadInfo { cpu_ticks: [0; 4] };
+    let mut count = HOST_CPU_LOAD_INFO_COUNT;
+    let kr =
+        unsafe { host_statistics(mach_host_self(), HOST_CPU_LOAD_INFO, &mut info, &mut count) };
+    if kr != 0 {
+        return None;
+    }
+    Some([
+        u64::from(info.cpu_ticks[0]),
+        u64::from(info.cpu_ticks[1]),
+        u64::from(info.cpu_ticks[2]),
+        u64::from(info.cpu_ticks[3]),
+    ])
+}
+
+#[cfg(not(target_os = "macos"))]
+fn read_cpu_ticks() -> Option<[u64; 4]> {
+    let stat = fs::read_to_string("/proc/stat").ok()?;
+    let line = stat.lines().next()?;
+    let mut parts = line.split_whitespace();
+    if parts.next()? != "cpu" {
+        return None;
+    }
+    let user: u64 = parts.next()?.parse().ok()?;
+    let nice: u64 = parts.next()?.parse().ok()?;
+    let sys: u64 = parts.next()?.parse().ok()?;
+    let idle: u64 = parts.next()?.parse().ok()?;
+    Some([user, sys, idle, nice])
 }
 
 pub(crate) fn resolve_git_branch(start_dir: &Path) -> Option<String> {

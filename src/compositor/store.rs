@@ -20,6 +20,7 @@ pub(crate) struct MetricSeries {
     pub latest: u8,
     pub label: Option<String>,
     pub expires_at: Option<Instant>,
+    pub from_ipc: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -73,6 +74,9 @@ impl TelemetryStore {
     ) -> Vec<(String, String)> {
         self.wall_clock = wall_clock;
         self.update_fg_telemetry(&builtins.fg_process, now);
+        if let Some(cpu) = builtins.cpu_usage {
+            self.push_metric_sample("cpu".to_string(), cpu, None, None, false);
+        }
         self.builtins = builtins;
         self.evict_expired(now);
         self.collect_due_commands(config, now)
@@ -80,7 +84,47 @@ impl TelemetryStore {
 
     pub fn on_command_output(&mut self, id: String, output: &str) {
         let trimmed = output.lines().next().unwrap_or("").trim().to_string();
-        self.command_outputs.insert(id, trimmed);
+        if let Some(metric_key) = id.strip_prefix("__metric__:") {
+            let cleaned = trimmed.trim_end_matches('%').trim();
+            if let Ok(val) = cleaned.parse::<f64>() {
+                let clamped = val.round().clamp(0.0, 100.0) as u8;
+                self.push_metric_sample(metric_key.to_string(), clamped, None, None, false);
+            }
+        } else {
+            self.command_outputs.insert(id, trimmed);
+        }
+    }
+
+    fn push_metric_sample(
+        &mut self,
+        key: String,
+        value: u8,
+        label: Option<String>,
+        expires_at: Option<Instant>,
+        from_ipc: bool,
+    ) {
+        let clamped = value.min(100);
+        let entry = self.metrics.entry(key).or_insert_with(|| MetricSeries {
+            history: VecDeque::with_capacity(MAX_METRIC_HISTORY),
+            latest: clamped,
+            label: None,
+            expires_at: None,
+            from_ipc,
+        });
+        if entry.history.len() >= MAX_METRIC_HISTORY {
+            entry.history.pop_front();
+        }
+        entry.history.push_back(clamped);
+        entry.latest = clamped;
+        if label.is_some() {
+            entry.label = label;
+        }
+        if expires_at.is_some() || from_ipc {
+            entry.expires_at = expires_at;
+        }
+        if from_ipc {
+            entry.from_ipc = true;
+        }
     }
 
     pub fn apply_ipc(&mut self, msg: IpcMessage, now: Instant) {
@@ -100,23 +144,8 @@ impl TelemetryStore {
                 label,
                 ttl_ms,
             } => {
-                let clamped = value.min(100);
                 let expires_at = ttl_ms.map(|ms| now + Duration::from_millis(ms));
-                let entry = self.metrics.entry(key).or_insert_with(|| MetricSeries {
-                    history: VecDeque::with_capacity(MAX_METRIC_HISTORY),
-                    latest: clamped,
-                    label: None,
-                    expires_at: None,
-                });
-                if entry.history.len() >= MAX_METRIC_HISTORY {
-                    entry.history.pop_front();
-                }
-                entry.history.push_back(clamped);
-                entry.latest = clamped;
-                if label.is_some() {
-                    entry.label = label;
-                }
-                entry.expires_at = expires_at;
+                self.push_metric_sample(key, value, label, expires_at, true);
             }
             IpcMessage::Toast {
                 message,
@@ -173,21 +202,46 @@ impl TelemetryStore {
 
         let mut due = Vec::new();
         for kind in specs {
-            if let WidgetKind::Command {
-                id,
-                cmd,
-                interval_ms,
-            } = kind
-            {
-                let interval = Duration::from_millis(*interval_ms);
-                let is_due = match self.command_last_run.get(id) {
-                    None => true,
-                    Some(&last) => now.saturating_duration_since(last) >= interval,
-                };
-                if is_due {
-                    self.command_last_run.insert(id.clone(), now);
-                    due.push((id.clone(), cmd.clone()));
+            match kind {
+                WidgetKind::Command {
+                    id,
+                    cmd,
+                    interval_ms,
+                } => {
+                    let interval = Duration::from_millis(*interval_ms);
+                    let is_due = match self.command_last_run.get(id) {
+                        None => true,
+                        Some(&last) => now.saturating_duration_since(last) >= interval,
+                    };
+                    if is_due {
+                        self.command_last_run.insert(id.clone(), now);
+                        due.push((id.clone(), cmd.clone()));
+                    }
                 }
+                WidgetKind::Sparkline {
+                    key,
+                    cmd: Some(cmd),
+                    interval_ms,
+                    ..
+                }
+                | WidgetKind::Gauge {
+                    key,
+                    cmd: Some(cmd),
+                    interval_ms,
+                    ..
+                } => {
+                    let cmd_id = format!("__metric__:{key}");
+                    let interval = Duration::from_millis(interval_ms.unwrap_or(2000));
+                    let is_due = match self.command_last_run.get(&cmd_id) {
+                        None => true,
+                        Some(&last) => now.saturating_duration_since(last) >= interval,
+                    };
+                    if is_due {
+                        self.command_last_run.insert(cmd_id.clone(), now);
+                        due.push((cmd_id, cmd.clone()));
+                    }
+                }
+                _ => {}
             }
         }
         due
@@ -250,7 +304,7 @@ impl TelemetryStore {
         });
 
         match &spec.kind {
-            WidgetKind::Sparkline { key, width } => {
+            WidgetKind::Sparkline { key, width, .. } => {
                 let Some(series) = self.metrics.get(key) else {
                     return Vec::new();
                 };
@@ -263,7 +317,9 @@ impl TelemetryStore {
                     vec![line]
                 }
             }
-            WidgetKind::Gauge { key, width, label } => {
+            WidgetKind::Gauge {
+                key, width, label, ..
+            } => {
                 let Some(series) = self.metrics.get(key) else {
                     return Vec::new();
                 };

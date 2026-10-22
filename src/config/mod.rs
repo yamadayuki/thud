@@ -112,10 +112,16 @@ pub enum WidgetKind {
     /// Named slot populated dynamically via IPC socket or builtin state map.
     IpcSlot { key: String },
     /// Historical sparkline (`▁▂▃▄▅▆▇█`) for a numeric metric slot (`0..=100`).
+    /// Note: `key = "cpu"` is populated automatically by built-in OS CPU telemetry,
+    /// or you can provide `cmd = "..."` to sample any shell command outputting `0..100`.
     Sparkline {
         key: String,
         #[serde(default = "default_sparkline_width")]
         width: usize,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cmd: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        interval_ms: Option<u64>,
     },
     /// Horizontal progress/metric gauge (`━━━─── 60%`) for a numeric slot (`0..=100`).
     Gauge {
@@ -124,6 +130,10 @@ pub enum WidgetKind {
         width: usize,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         label: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cmd: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        interval_ms: Option<u64>,
     },
 }
 

@@ -18,6 +18,8 @@ pub struct BuiltinValues {
     pub battery: Option<String>,
     /// Active foreground process name inside the child PTY (None if idle at the root shell).
     pub fg_process: Option<String>,
+    /// System-wide CPU load percentage (`0..=100`), automatically feeding the `"cpu"` metric slot.
+    pub cpu_usage: Option<u8>,
 }
 
 /// All external occurrences that drive the Sans-I/O `Compositor` state machine.
@@ -333,12 +335,12 @@ impl Compositor {
     fn render_toast_stack(&self, buf: &mut Buffer, child_size: TermSize) {
         let mut current_row = i32::from(child_size.rows) - 1;
 
-        // 1. Render any active unreferenced progress metrics (`thud progress <key> <pct>`)
+        // 1. Render any active unreferenced IPC progress metrics (`thud progress <key> <pct>`)
         for (key, series) in &self.store.metrics {
             if current_row < 0 {
                 break;
             }
-            if self.store.is_metric_referenced(&self.config, key) {
+            if !series.from_ipc || self.store.is_metric_referenced(&self.config, key) {
                 continue;
             }
             let label = series.label.as_deref().unwrap_or(key.as_str());
@@ -435,6 +437,7 @@ mod tests {
                     git_branch: None,
                     battery: None,
                     fg_process: None,
+                    cpu_usage: None,
                 },
             },
             now,
@@ -748,5 +751,40 @@ mod tests {
         );
         assert!(!comp.rendered_text().contains("DASHBOARD"));
         assert!(!comp.rendered_text().contains("⚙ cargo"));
+    }
+
+    #[test]
+    fn cpu_sparkline_renders_automatically_from_builtin_cpu_telemetry() {
+        let now = Instant::now();
+        let cfg = Config::from_toml(
+            r#"
+            theme = "tokyo_night"
+
+            [status_bar]
+            separator = " "
+            left = []
+            right = [
+                { type = "sparkline", key = "cpu", width = 8, icon = "CPU", padding = true }
+            ]
+            overlays = []
+        "#,
+        )
+        .unwrap();
+
+        let (mut comp, _) = Compositor::new(TermSize { cols: 30, rows: 3 }, cfg, now).unwrap();
+        comp.step(
+            Event::Tick {
+                wall_clock: Local::now(),
+                builtins: BuiltinValues {
+                    cpu_usage: Some(50),
+                    ..Default::default()
+                },
+            },
+            now,
+        );
+
+        let rendered = comp.rendered_text();
+        let last_line = rendered.lines().last().unwrap();
+        assert!(last_line.contains(" CPU ▁▁▁▁▁▁▁▄ "));
     }
 }
