@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 /// and samples foreground process CWD, Git branch, and command name into `BuiltinValues`.
 #[derive(Debug, Default)]
 pub(crate) struct SystemProbes {
-    cached_battery: Option<String>,
+    cached_battery: Option<u8>,
     last_battery_probe: Option<Instant>,
     prev_cpu_ticks: Option<[u64; 4]>,
     last_cpu_probe: Option<Instant>,
@@ -63,7 +63,7 @@ impl SystemProbes {
         BuiltinValues {
             cwd,
             git_branch,
-            battery: self.cached_battery.clone(),
+            battery: self.cached_battery,
             fg_process,
             cpu_usage,
         }
@@ -276,7 +276,7 @@ fn shorten_home(path: &Path) -> String {
     path.display().to_string()
 }
 
-fn probe_battery() -> Option<String> {
+fn probe_battery() -> Option<u8> {
     #[cfg(target_os = "macos")]
     {
         let output = Command::new("pmset")
@@ -288,8 +288,10 @@ fn probe_battery() -> Option<String> {
         let text = String::from_utf8_lossy(&output.stdout);
         for token in text.split_whitespace() {
             let cleaned = token.trim_end_matches(';');
-            if cleaned.ends_with('%') {
-                return Some(cleaned.to_string());
+            if let Some(num_str) = cleaned.strip_suffix('%')
+                && let Ok(pct) = num_str.parse::<u8>()
+            {
+                return Some(pct.min(100));
             }
         }
         None
@@ -297,6 +299,7 @@ fn probe_battery() -> Option<String> {
     #[cfg(not(target_os = "macos"))]
     {
         let cap = fs::read_to_string("/sys/class/power_supply/BAT0/capacity").ok()?;
-        Some(format!("{}%", cap.trim()))
+        let pct = cap.trim().parse::<u8>().ok()?;
+        Some(pct.min(100))
     }
 }

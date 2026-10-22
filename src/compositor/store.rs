@@ -2,7 +2,7 @@ use crate::compositor::BuiltinValues;
 use crate::config::{
     CommandTrigger, Config, IpcMessage, OverlayConfig, ToastLevel, WidgetKind, WidgetSpec,
 };
-use crate::ui::{CellStyle, Color, Gauge, Line, Span, Sparkline, ThemePalette, ThemePreset};
+use crate::ui::{CellStyle, Color, Gauge, Line, Span, Sparkline, ThemeConfig, ThemePalette};
 use chrono::{DateTime, Local};
 use std::collections::{BTreeMap, VecDeque};
 use std::path::{Path, PathBuf};
@@ -82,6 +82,9 @@ impl TelemetryStore {
         self.update_fg_telemetry(&builtins.fg_process, now);
         if let Some(cpu) = builtins.cpu_usage {
             self.push_metric_sample("cpu".to_string(), cpu, None, None, false);
+        }
+        if let Some(batt) = builtins.battery {
+            self.push_metric_sample("battery".to_string(), batt, None, None, false);
         }
         self.builtins = builtins;
         self.evict_expired(now);
@@ -290,17 +293,22 @@ impl TelemetryStore {
     fn resolve_widget_style(
         spec: &WidgetSpec,
         fallback_style: CellStyle,
-        theme: ThemePreset,
+        theme: ThemeConfig,
         in_status_bar: bool,
     ) -> CellStyle {
         let palette: ThemePalette = theme.palette();
-        let (default_fg, default_bg) = if in_status_bar && theme != ThemePreset::Default {
+        let (default_fg, default_bg) = if in_status_bar && !theme.is_unthemed_default() {
             match &spec.kind {
                 WidgetKind::Cwd => palette.cwd_accent,
                 WidgetKind::GitBranch => palette.git_accent,
                 WidgetKind::ActiveCommand { .. } => palette.cmd_accent,
-                WidgetKind::Sparkline { .. } | WidgetKind::Gauge { .. } => palette.metric_accent,
-                WidgetKind::Battery => palette.battery_accent,
+                WidgetKind::Sparkline { key, .. } | WidgetKind::Gauge { key, .. } => {
+                    if key == "battery" {
+                        palette.battery_accent
+                    } else {
+                        palette.metric_accent
+                    }
+                }
                 _ => (fallback_style.fg, fallback_style.bg),
             }
         } else {
@@ -322,7 +330,7 @@ impl TelemetryStore {
         &self,
         spec: &WidgetSpec,
         fallback_style: CellStyle,
-        theme: ThemePreset,
+        theme: ThemeConfig,
         in_status_bar: bool,
         now: Instant,
     ) -> Vec<Line> {
@@ -334,7 +342,7 @@ impl TelemetryStore {
         let prefix = spec.style.prefix.as_deref();
         let suffix = spec.style.suffix.as_deref();
         let track_fg = spec.style.track_fg.or_else(|| {
-            if theme != ThemePreset::Default {
+            if !theme.is_unthemed_default() {
                 Some(theme.palette().track_fg)
             } else {
                 None
@@ -398,7 +406,6 @@ impl TelemetryStore {
                     WidgetKind::Clock { format } => self.wall_clock.format(format).to_string(),
                     WidgetKind::Cwd => self.builtins.cwd.clone().unwrap_or_default(),
                     WidgetKind::GitBranch => self.builtins.git_branch.clone().unwrap_or_default(),
-                    WidgetKind::Battery => self.builtins.battery.clone().unwrap_or_default(),
                     WidgetKind::Text { text } => text.clone(),
                     WidgetKind::Command { id, .. } => {
                         self.command_outputs.get(id).cloned().unwrap_or_default()
@@ -434,7 +441,7 @@ impl TelemetryStore {
         specs: &[WidgetSpec],
         sep: &str,
         bar_style: CellStyle,
-        theme: ThemePreset,
+        theme: ThemeConfig,
         now: Instant,
     ) -> Line {
         let mut out = Line::default();

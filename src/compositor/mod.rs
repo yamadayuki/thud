@@ -15,7 +15,8 @@ use std::time::Instant;
 pub struct BuiltinValues {
     pub cwd: Option<String>,
     pub git_branch: Option<String>,
-    pub battery: Option<String>,
+    /// System battery percentage (`0..=100`), automatically feeding the `"battery"` metric slot.
+    pub battery: Option<u8>,
     /// Active foreground process name inside the child PTY (None if idle at the root shell).
     pub fg_process: Option<String>,
     /// System-wide CPU load percentage (`0..=100`), automatically feeding the `"cpu"` metric slot.
@@ -764,19 +765,21 @@ mod tests {
             separator = " "
             left = []
             right = [
-                { type = "sparkline", key = "cpu", width = 8, icon = "CPU", padding = true }
+                { type = "sparkline", key = "cpu", width = 8, icon = "CPU", padding = true },
+                { type = "gauge", key = "battery", width = 4, pill = true }
             ]
             overlays = []
         "#,
         )
         .unwrap();
 
-        let (mut comp, _) = Compositor::new(TermSize { cols: 30, rows: 3 }, cfg, now).unwrap();
+        let (mut comp, _) = Compositor::new(TermSize { cols: 40, rows: 3 }, cfg, now).unwrap();
         comp.step(
             Event::Tick {
                 wall_clock: Local::now(),
                 builtins: BuiltinValues {
                     cpu_usage: Some(50),
+                    battery: Some(75),
                     ..Default::default()
                 },
             },
@@ -786,6 +789,7 @@ mod tests {
         let rendered = comp.rendered_text();
         let last_line = rendered.lines().last().unwrap();
         assert!(last_line.contains(" CPU ▁▁▁▁▁▁▁▄ "));
+        assert!(last_line.contains("━━━─ 75%"));
     }
 
     #[test]

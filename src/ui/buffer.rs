@@ -132,11 +132,17 @@ impl Buffer {
             };
         }
 
+        let mut resolved_style = style;
         if let Some(idx) = self.idx(row, col) {
+            let prev_style = self.cells[idx].style;
+            let blended_bg = style.bg.blend_over(prev_style.bg, (26, 27, 38));
+            let blended_fg = style.fg.blend_over(blended_bg, (26, 27, 38));
+            resolved_style.bg = blended_bg;
+            resolved_style.fg = blended_fg;
             self.cells[idx] = Cell {
                 ch: c.to_string(),
                 width: char_width,
-                style,
+                style: resolved_style,
             };
         }
 
@@ -146,7 +152,7 @@ impl Buffer {
             self.cells[next_idx] = Cell {
                 ch: String::new(),
                 width: 0,
-                style,
+                style: resolved_style,
             };
         }
     }
@@ -307,20 +313,20 @@ impl Buffer {
             out.push_str(";7");
         }
         match style.fg {
-            Color::Default => {}
+            Color::Default | Color::Rgba(_, _, _, 0) => {}
             Color::Ansi(idx) => {
                 let _ = write!(out, ";38;5;{idx}");
             }
-            Color::Rgb(r, g, b) => {
+            Color::Rgb(r, g, b) | Color::Rgba(r, g, b, _) => {
                 let _ = write!(out, ";38;2;{r};{g};{b}");
             }
         }
         match style.bg {
-            Color::Default => {}
+            Color::Default | Color::Rgba(_, _, _, 0) => {}
             Color::Ansi(idx) => {
                 let _ = write!(out, ";48;5;{idx}");
             }
-            Color::Rgb(r, g, b) => {
+            Color::Rgb(r, g, b) | Color::Rgba(r, g, b, _) => {
                 let _ = write!(out, ";48;2;{r};{g};{b}");
             }
         }

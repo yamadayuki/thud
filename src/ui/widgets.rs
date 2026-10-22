@@ -222,6 +222,10 @@ impl<'a> Gauge<'a> {
         {
             spans.push(Span::styled(format!("{lbl} "), label_style));
         }
+        if self.width == 0 {
+            spans.push(Span::styled(format!("{clamped}%"), label_style));
+            return Line::new(spans);
+        }
         if !filled_str.is_empty() {
             spans.push(Span::styled(filled_str, filled_style));
         }

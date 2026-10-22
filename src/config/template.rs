@@ -17,10 +17,13 @@ impl Config {
              # thud - Terminal Heads Up Display Configuration\n\
              # Default path: ~/.config/thud/config.toml (or override via $THUD_CONFIG / --config)\n\
              # =============================================================================\n\n\
-             # Color Theme Preset:\n\
+             # Color Theme Preset or Custom Theme Table:\n\
              #   \"default\" | \"tokyo_night\" | \"catppuccin\" | \"cyberpunk\" | \"nord\" | \"gruvbox\"\n\
-             # Setting a theme automatically styles the status bar, overlay borders/titles,\n\
-             # and per-widget accent colors unless overridden by explicit `fg` / `bg` fields.\n",
+             # Or customize any preset color inline or via `[theme]`:\n\
+             #   theme = { preset = \"tokyo_night\", bar_bg = \"transparent\", overlay_bg = \"#24283b@0.8\", cwd_bg = \"#7aa2f7\" }\n\
+             # Available theme override keys:\n\
+             #   bar_fg, bar_bg, overlay_fg, overlay_bg, border_fg, title_fg, track_fg,\n\
+             #   cwd_fg, cwd_bg, git_fg, git_bg, cmd_fg, cmd_bg, metric_fg, metric_bg, battery_fg, battery_bg\n",
         );
         let _ = writeln!(out, "theme = {}", format_inline_value(&self.theme));
 
@@ -80,10 +83,12 @@ impl Config {
              # (including fullscreen TUI apps like vim, htop, fzf, less) never overwrite it.\n\
              #\n\
              # Colors (`fg`, `bg`, `border_fg`, `title_fg`, `track_fg`) accept:\n\
+             #   - Transparency:   \"transparent\" (lets Ghostty/WezTerm/Kitty window opacity shine through)\n\
              #   - Semantic names: \"cyan\", \"blue\", \"green\", \"magenta\", \"yellow\", \"red\",\n\
              #                     \"white\", \"black\", \"gray\", \"dark_gray\", \"orange\", \"purple\",\n\
              #                     \"pink\", \"teal\", \"lavender\", \"peach\", \"sky\", \"mauve\", \"emerald\"\n\
              #   - Hex TrueColor:  \"#89b4fa\", \"#1e1e2e\"\n\
+             #   - Alpha / Opacity:\"#24283b80\" (8-digit RGBA) or \"#24283b@0.75\" / \"cyan@50%\"\n\
              #   - ANSI 256 index: 0..255 (e.g. 231 = bright white, 236 = dark charcoal)\n\
              # -----------------------------------------------------------------------------\n\
              [status_bar]\n",
@@ -120,20 +125,18 @@ impl Config {
              #      -> Current Git branch or short commit SHA (e.g. \"git:main\")\n\
              #   3. { type = \"active_command\", min_secs = 2 }\n\
              #      -> Foreground process name & elapsed timer when running >= min_secs (e.g. \"⚙ cargo (5s)\")\n\
-             #   4. { type = \"battery\" }\n\
-             #      -> System battery level (e.g. \"100%\")\n\
-             #   5. { type = \"clock\", format = \"%Y-%m-%d %H:%M:%S\" }\n\
+             #   4. { type = \"clock\", format = \"%Y-%m-%d %H:%M:%S\" }\n\
              #      -> Local time formatted with strftime syntax (default: \"%H:%M:%S\")\n\
-             #   6. { type = \"text\", text = \"PROD\" }\n\
+             #   5. { type = \"text\", text = \"PROD\" }\n\
              #      -> Static label string\n\
-             #   7. { type = \"command\", id = \"node\", cmd = \"node -v\", trigger = \"change\", when_files = [\"package.json\", \".nvmrc\"] }\n\
+             #   6. { type = \"command\", id = \"node\", cmd = \"node -v\", trigger = \"change\", when_files = [\"package.json\", \".nvmrc\"] }\n\
              #      -> Event-driven `sh -c` command (`trigger = \"change\" | \"cwd\" | \"interval\"`, optional `when_files` filter)\n\
-             #   8. { type = \"ipc_slot\", key = \"status\" }\n\
+             #   7. { type = \"ipc_slot\", key = \"status\" }\n\
              #      -> Dynamic slot updated via `thud set status \"BUILDING...\" --ttl-ms 5000`\n\
-             #   9. { type = \"sparkline\", key = \"cpu\", width = 8 }\n\
-             #      -> Historical mini-graph (`▁▂▃▄▅▆▇█`) fed via `thud progress cpu 65`\n\
-             #  10. { type = \"gauge\", key = \"build\", width = 10, label = \"Build\", track_fg = \"dark_gray\" }\n\
-             #      -> Progress bar (`━━━─── 60%`) fed via `thud progress build 60 --label \"Compiling\"`\n",
+             #   8. { type = \"sparkline\", key = \"cpu\", width = 8 }\n\
+             #      -> Historical mini-graph (`▁▂▃▄▅▆▇█`); built-in keys: \"cpu\", \"battery\", or custom via `cmd` / `thud progress`\n\
+             #   9. { type = \"gauge\", key = \"battery\", width = 6 }\n\
+             #      -> Progress/metric bar (`━━━━── 85%`); built-in keys: \"battery\", \"cpu\", or custom via `cmd` / `thud progress`\n",
         );
 
         write_widget_array(&mut out, "left", &self.status_bar.left);

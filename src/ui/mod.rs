@@ -6,7 +6,9 @@ pub mod widgets;
 
 pub use buffer::{Buffer, Cell, CursorState};
 pub use rect::Rect;
-pub use style::{Anchor, BorderStyle, CellStyle, Color, TermSize, ThemePalette, ThemePreset};
+pub use style::{
+    Anchor, BorderStyle, CellStyle, Color, TermSize, ThemeConfig, ThemePalette, ThemePreset,
+};
 pub use text::{Line, Span, display_width};
 pub use widgets::{Block, Gauge, Sparkline, StatusBar, Toast, Widget};
 
@@ -49,5 +51,37 @@ mod tests {
         assert_eq!(Color::parse_str("cyan").unwrap(), Color::Rgb(137, 220, 235));
         assert_eq!(Color::parse_str("#1e1e2e").unwrap(), Color::Rgb(30, 30, 46));
         assert_eq!(Color::parse_str("231").unwrap(), Color::Ansi(231));
+        assert_eq!(Color::parse_str("transparent").unwrap(), Color::Default);
+        assert_eq!(
+            Color::parse_str("#1e1e2e80").unwrap(),
+            Color::Rgba(30, 30, 46, 128)
+        );
+        assert_eq!(
+            Color::parse_str("#1e1e2e@0.5").unwrap(),
+            Color::Rgba(30, 30, 46, 128)
+        );
+        assert_eq!(Color::parse_str("cyan@0%").unwrap(), Color::Default);
+
+        // Verify in-buffer alpha blending over an underlying cell background
+        let mut buf = Buffer::new(4, 1);
+        buf.set_char(
+            0,
+            0,
+            'A',
+            1,
+            CellStyle::new(Color::Rgb(255, 255, 255), Color::Rgb(0, 0, 0), false),
+        );
+        buf.set_char(
+            0,
+            0,
+            'B',
+            1,
+            CellStyle::new(
+                Color::Rgb(255, 255, 255),
+                Color::Rgba(200, 100, 50, 128),
+                false,
+            ),
+        );
+        assert_eq!(buf.get(0, 0).unwrap().style.bg, Color::Rgb(100, 50, 25));
     }
 }

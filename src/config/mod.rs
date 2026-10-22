@@ -1,7 +1,9 @@
 pub mod ipc;
 pub mod template;
 
-pub use crate::ui::{Anchor, BorderStyle, CellStyle, Color, TermSize, ThemePalette, ThemePreset};
+pub use crate::ui::{
+    Anchor, BorderStyle, CellStyle, Color, TermSize, ThemeConfig, ThemePalette, ThemePreset,
+};
 pub use ipc::{IpcMessage, ToastLevel};
 
 use serde::{Deserialize, Serialize};
@@ -105,8 +107,6 @@ pub enum WidgetKind {
     Cwd,
     /// Current Git branch in the working directory.
     GitBranch,
-    /// System battery percentage / status.
-    Battery,
     /// Foreground process telemetry (e.g. `⚙ cargo (12s)` when running >= `min_secs`).
     ActiveCommand {
         #[serde(default)]
@@ -241,7 +241,13 @@ impl Default for StatusBarConfig {
                 }),
             ],
             center: vec![],
-            right: vec![WidgetSpec::new(WidgetKind::Battery)],
+            right: vec![WidgetSpec::new(WidgetKind::Gauge {
+                key: "battery".to_string(),
+                width: 6,
+                label: None,
+                cmd: None,
+                interval_ms: None,
+            })],
         }
     }
 }
@@ -287,7 +293,7 @@ pub struct OverlayConfig {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Config {
     #[serde(default)]
-    pub theme: ThemePreset,
+    pub theme: ThemeConfig,
     #[serde(default)]
     pub shell: Option<String>,
     #[serde(default)]
@@ -340,7 +346,7 @@ fn default_overlays() -> Vec<OverlayConfig> {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            theme: ThemePreset::Default,
+            theme: ThemeConfig::default(),
             shell: None,
             ipc_socket: None,
             zen_toggle_key: default_zen_toggle_key(),
@@ -518,7 +524,7 @@ mod tests {
             ]
             right = [
                 { type = "gauge", key = "build", width = 8, label = "Build", track_fg = "dark_gray" },
-                { type = "battery", padding = true }
+                { type = "gauge", key = "battery", width = 6, padding = true }
             ]
 
             [[overlays]]
@@ -526,6 +532,7 @@ mod tests {
             anchor = "top_right"
             border = "rounded"
             title = " HUD "
+            bg = "#24283b@0.8"
             border_fg = "cyan"
             title_fg = "#f9e2af"
             padding_x = 1
@@ -537,7 +544,7 @@ mod tests {
         "##;
 
         let cfg = Config::from_toml(toml_input).expect("valid TOML");
-        assert_eq!(cfg.theme, ThemePreset::TokyoNight);
+        assert_eq!(cfg.theme, ThemeConfig::from_preset(ThemePreset::TokyoNight));
         assert_eq!(cfg.shell.as_deref(), Some("/bin/zsh"));
         assert_eq!(
             Config::parse_hotkey_byte(cfg.zen_toggle_key.as_deref()),
@@ -559,6 +566,27 @@ mod tests {
         let regenerated = cfg.to_annotated_toml();
         let reparsed = Config::from_toml(&regenerated).expect("regenerated TOML must be valid");
         assert_eq!(reparsed, cfg);
+
+        // Also verify `[theme]` table customization overrides individual palette colors
+        let custom_theme_toml = r##"
+            [theme]
+            preset = "catppuccin"
+            bar_bg = "transparent"
+            overlay_bg = "#1e1e2e@0.75"
+            cwd_bg = "#89b4fa"
+            battery_bg = "#a6e3a1"
+        "##;
+        let custom_cfg = Config::from_toml(custom_theme_toml).expect("valid custom [theme] table");
+        assert_eq!(custom_cfg.theme.preset, ThemePreset::Catppuccin);
+        assert_eq!(custom_cfg.theme.bar_bg, Some(Color::Default));
+        assert_eq!(
+            custom_cfg.theme.palette().cwd_accent.1,
+            Color::Rgb(137, 180, 250)
+        );
+        assert_eq!(
+            Config::from_toml(&custom_cfg.to_annotated_toml()).unwrap(),
+            custom_cfg
+        );
     }
 
     #[test]
