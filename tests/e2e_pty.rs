@@ -1,6 +1,7 @@
 use libc::{POLLIN, TIOCSWINSZ, c_int, c_void, pollfd, winsize};
 use std::ffi::CString;
 use std::io;
+use std::num::NonZeroU16;
 use std::time::{Duration, Instant};
 
 /// An automated "Outer Terminal Emulator" harness for AI Agents and CI.
@@ -67,10 +68,12 @@ impl OuterTerminalSimulator {
             }
         }
 
+        let nz_rows = NonZeroU16::new(rows.max(1)).unwrap();
+        let nz_cols = NonZeroU16::new(cols.max(1)).unwrap();
         Ok(Self {
             master_fd,
             child_pid: pid,
-            vt: vt100::Parser::new(rows, cols, 0),
+            vt: vt100::Parser::new(nz_rows, nz_cols, 0),
             raw_output: Vec::new(),
         })
     }
@@ -106,7 +109,9 @@ impl OuterTerminalSimulator {
         unsafe {
             libc::kill(self.child_pid, libc::SIGWINCH);
         }
-        self.vt.set_size(rows, cols);
+        let nz_rows = NonZeroU16::new(rows.max(1)).unwrap();
+        let nz_cols = NonZeroU16::new(cols.max(1)).unwrap();
+        self.vt.set_size(nz_rows, nz_cols);
         Ok(())
     }
 
@@ -148,6 +153,7 @@ impl OuterTerminalSimulator {
     fn row_text(&self, row: u16) -> String {
         let screen = self.vt.screen();
         let (_, cols) = screen.size();
+        let cols = cols.get();
         let mut s = String::new();
         let mut c = 0;
         while c < cols {
@@ -160,7 +166,7 @@ impl OuterTerminalSimulator {
                 if ch.is_empty() {
                     s.push(' ');
                 } else {
-                    s.push_str(&ch);
+                    s.push_str(ch);
                 }
                 c += if cell.is_wide() { 2 } else { 1 };
             } else {
@@ -286,7 +292,7 @@ fn e2e_outer_pty_interactive_input_status_bar_ipc_and_clean_exit() {
             let mut row29 = String::new();
             for c in 0..100 {
                 if let Some(cell) = screen.cell(29, c) {
-                    row29.push_str(&cell.contents());
+                    row29.push_str(cell.contents());
                 }
             }
             row29.contains("LIVE_IPC_OK")

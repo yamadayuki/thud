@@ -4,7 +4,7 @@ pub(crate) mod vt;
 
 use crate::compositor::layout::PlacementSolver;
 use crate::compositor::store::TelemetryStore;
-use crate::compositor::vt::VtScreenAdapter;
+use crate::compositor::vt::{MouseEventKind, VtScreenAdapter, parse_mouse_event};
 use crate::config::{
     Anchor, Color, Config, ConfigError, IpcMessage, OverlayConfig, ScreenCondition,
     StatusBarPosition, TermSize,
@@ -129,8 +129,55 @@ impl Compositor {
             Event::HostInput(bytes) => {
                 let zen_byte = Config::parse_hotkey_byte(self.config.zen_toggle_key.as_deref());
                 let reload_byte = Config::parse_hotkey_byte(self.config.reload_key.as_deref());
+                let child_rect = PlacementSolver::compute_child_rect(
+                    self.host_size,
+                    &self.config,
+                    self.zen_mode,
+                );
 
-                for &b in bytes {
+                let mut i = 0;
+                while i < bytes.len() {
+                    if let Some(mouse_ev) = parse_mouse_event(&bytes[i..]) {
+                        if self.vt.wants_mouse() {
+                            if mouse_ev.is_sgr {
+                                let adj_row = mouse_ev.row.saturating_sub(child_rect.y).max(1);
+                                let suffix = if mouse_ev.release { 'm' } else { 'M' };
+                                let _ = std::io::Write::write_fmt(
+                                    &mut child_pty_input,
+                                    format_args!(
+                                        "\x1b[<{};{};{}{}",
+                                        mouse_ev.btn, mouse_ev.col, adj_row, suffix
+                                    ),
+                                );
+                            } else {
+                                child_pty_input.extend_from_slice(&bytes[i..i + mouse_ev.len]);
+                            }
+                        } else if self.vt.is_alternate_screen() {
+                            match mouse_ev.kind {
+                                MouseEventKind::WheelUp => {
+                                    child_pty_input.extend_from_slice(b"\x1b[A");
+                                }
+                                MouseEventKind::WheelDown => {
+                                    child_pty_input.extend_from_slice(b"\x1b[B");
+                                }
+                                MouseEventKind::Other => {}
+                            }
+                        } else {
+                            match mouse_ev.kind {
+                                MouseEventKind::WheelUp => {
+                                    self.vt.scroll_up(3);
+                                }
+                                MouseEventKind::WheelDown => {
+                                    self.vt.scroll_down(3);
+                                }
+                                MouseEventKind::Other => {}
+                            }
+                        }
+                        i += mouse_ev.len;
+                        continue;
+                    }
+
+                    let b = bytes[i];
                     if Some(b) == zen_byte {
                         self.zen_mode = !self.zen_mode;
                         let new_child_size = self.child_size();
@@ -139,8 +186,10 @@ impl Compositor {
                     } else if Some(b) == reload_byte {
                         reload_config = true;
                     } else {
+                        self.vt.reset_scrollback();
                         child_pty_input.push(b);
                     }
+                    i += 1;
                 }
             }
             Event::PtyOutput(bytes) => {
@@ -988,5 +1037,68 @@ mod tests {
         let lines: Vec<&str> = rendered.lines().collect();
         assert!(lines[0].contains("RELOADED"));
         assert!(lines[1].starts_with("shell-line"));
+    }
+
+    #[test]
+    fn mouse_wheel_scrolls_virtual_screen_scrollback_and_key_snaps_back() {
+        let now = Instant::now();
+        let cfg = Config::from_toml(
+            r#"
+            overlays = []
+            [status_bar]
+            enabled = false
+        "#,
+        )
+        .unwrap();
+
+        // 2-row terminal
+        let (mut comp, _) = Compositor::new(TermSize { cols: 20, rows: 2 }, cfg, now).unwrap();
+
+        // Generate 6 lines of output
+        comp.step(
+            Event::PtyOutput(b"line 1\r\nline 2\r\nline 3\r\nline 4\r\nline 5\r\nline 6"),
+            now,
+        );
+        let bottom_text = comp.rendered_text();
+        assert!(bottom_text.contains("line 5"));
+        assert!(bottom_text.contains("line 6"));
+        assert!(!bottom_text.contains("line 1"));
+
+        // Wheel Up (SGR: button 64 at col 10, row 2) -> scrolls up by 3 rows
+        let tx_scroll = comp.step(Event::HostInput(b"\x1b[<64;10;2M"), now);
+        assert!(tx_scroll.child_pty_input.is_empty());
+        let scrolled_text = comp.rendered_text();
+        assert!(scrolled_text.contains("line 2") || scrolled_text.contains("line 3"));
+
+        // Wheel Down (SGR: button 65 at col 10, row 2) -> scrolls down toward bottom
+        comp.step(Event::HostInput(b"\x1b[<65;10;2M"), now);
+        let scrolled_down = comp.rendered_text();
+        assert!(scrolled_down.contains("line 5") || scrolled_down.contains("line 6"));
+
+        // Wheel up again, then typing any key snaps scrollback to 0 and forwards key to child PTY
+        comp.step(Event::HostInput(b"\x1b[<64;10;2M"), now);
+        let tx_key = comp.step(Event::HostInput(b"ls\r"), now);
+        assert_eq!(tx_key.child_pty_input, b"ls\r");
+        let restored_text = comp.rendered_text();
+        assert!(restored_text.contains("line 6"));
+    }
+
+    #[test]
+    fn mouse_events_forward_to_child_app_when_requested_or_in_alternate_screen() {
+        let now = Instant::now();
+        let cfg = Config::default();
+        let (mut comp, _) = Compositor::new(TermSize { cols: 40, rows: 10 }, cfg, now).unwrap();
+
+        // 1. Child in alternate screen without mouse mode (e.g. `less`) translates wheel up/down to Up/Down arrow keys
+        comp.step(Event::PtyOutput(b"\x1b[?1049h"), now);
+        let tx_less_up = comp.step(Event::HostInput(b"\x1b[<64;10;5M"), now);
+        assert_eq!(tx_less_up.child_pty_input, b"\x1b[A");
+        let tx_less_down = comp.step(Event::HostInput(b"\x1b[<65;10;5M"), now);
+        assert_eq!(tx_less_down.child_pty_input, b"\x1b[B");
+
+        // 2. Child enables SGR mouse mode (e.g. `vim`) -> mouse events are forwarded directly with adjusted row
+        comp.step(Event::PtyOutput(b"\x1b[?1000h\x1b[?1006h"), now);
+        let tx_vim = comp.step(Event::HostInput(b"\x1b[<0;15;4M"), now);
+        assert_eq!(tx_vim.child_pty_input, b"\x1b[<0;15;4M");
     }
 }

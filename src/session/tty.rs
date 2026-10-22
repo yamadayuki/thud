@@ -52,8 +52,8 @@ impl OsHostTerminal {
             stdout: io::stdout(),
             orig_termios,
         };
-        // Enter outer alternate screen buffer and clear screen
-        host.write_diff(b"\x1b[?1049h\x1b[2J\x1b[H")?;
+        // Enter outer alternate screen buffer, enable SGR mouse wheel/button tracking, and clear screen
+        host.write_diff(b"\x1b[?1049h\x1b[?1000h\x1b[?1006h\x1b[2J\x1b[H")?;
         Ok(host)
     }
 
@@ -83,7 +83,7 @@ impl OsHostTerminal {
 
 impl Drop for OsHostTerminal {
     fn drop(&mut self) {
-        let _ = self.write_diff(b"\x1b[0m\x1b[?25h\x1b[?1049l");
+        let _ = self.write_diff(b"\x1b[0m\x1b[?25h\x1b[?1006l\x1b[?1000l\x1b[?1049l");
         unsafe {
             libc::tcsetattr(self.stdin_fd, libc::TCSANOW, &self.orig_termios);
         }

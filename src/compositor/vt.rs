@@ -1,4 +1,89 @@
 use crate::ui::{Buffer, CellStyle, Color, CursorState, Rect};
+use std::num::NonZeroU16;
+
+/// Default number of scrollback lines retained in the primary virtual screen.
+const DEFAULT_SCROLLBACK_LINES: usize = 10_000;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum MouseEventKind {
+    WheelUp,
+    WheelDown,
+    Other,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ParsedMouseEvent {
+    pub kind: MouseEventKind,
+    pub btn: u16,
+    pub col: u16,
+    pub row: u16,
+    pub release: bool,
+    pub is_sgr: bool,
+    pub len: usize,
+}
+
+/// Parses an SGR (`\x1b[<btn;col;rowM`/`m`) or X10 (`\x1b[M<b1><b2><b3>`) mouse sequence
+/// from the start of `bytes`.
+pub(crate) fn parse_mouse_event(bytes: &[u8]) -> Option<ParsedMouseEvent> {
+    if bytes.starts_with(b"\x1b[<") {
+        let mut end = 3;
+        while end < bytes.len() && (bytes[end].is_ascii_digit() || bytes[end] == b';') {
+            end += 1;
+        }
+        if end < bytes.len() && (bytes[end] == b'M' || bytes[end] == b'm') {
+            let release = bytes[end] == b'm';
+            let body = std::str::from_utf8(&bytes[3..end]).ok()?;
+            let mut parts = body.split(';');
+            let btn: u16 = parts.next()?.parse().ok()?;
+            let col: u16 = parts.next()?.parse().ok()?;
+            let row: u16 = parts.next()?.parse().ok()?;
+            if parts.next().is_some() {
+                return None;
+            }
+            let kind = if !release && (btn & 64) != 0 {
+                match btn & 3 {
+                    0 => MouseEventKind::WheelUp,
+                    1 => MouseEventKind::WheelDown,
+                    _ => MouseEventKind::Other,
+                }
+            } else {
+                MouseEventKind::Other
+            };
+            return Some(ParsedMouseEvent {
+                kind,
+                btn,
+                col,
+                row,
+                release,
+                is_sgr: true,
+                len: end + 1,
+            });
+        }
+    } else if bytes.starts_with(b"\x1b[M") && bytes.len() >= 6 {
+        let btn = u16::from(bytes[3].saturating_sub(32));
+        let col = u16::from(bytes[4].saturating_sub(32));
+        let row = u16::from(bytes[5].saturating_sub(32));
+        let kind = if (btn & 64) != 0 {
+            match btn & 3 {
+                0 => MouseEventKind::WheelUp,
+                1 => MouseEventKind::WheelDown,
+                _ => MouseEventKind::Other,
+            }
+        } else {
+            MouseEventKind::Other
+        };
+        return Some(ParsedMouseEvent {
+            kind,
+            btn,
+            col,
+            row,
+            release: false,
+            is_sgr: false,
+            len: 6,
+        });
+    }
+    None
+}
 
 /// Internal adapter wrapping `vt100::Parser` (dual Primary/Alternate screen state machine),
 /// terminal capability query responder (`DA1`, `DA2`, `DSR`, `XTVERSION`, Kitty keyboard, `OSC 10/11`),
@@ -9,17 +94,58 @@ pub(crate) struct VtScreenAdapter {
 
 impl VtScreenAdapter {
     pub fn new(cols: u16, rows: u16) -> Self {
+        let nz_rows = NonZeroU16::new(rows.max(1)).unwrap();
+        let nz_cols = NonZeroU16::new(cols.max(1)).unwrap();
         Self {
-            vt: vt100::Parser::new(rows, cols, 0),
+            vt: vt100::Parser::new(nz_rows, nz_cols, DEFAULT_SCROLLBACK_LINES),
         }
     }
 
     pub fn set_size(&mut self, cols: u16, rows: u16) {
-        self.vt.set_size(rows, cols);
+        let nz_rows = NonZeroU16::new(rows.max(1)).unwrap();
+        let nz_cols = NonZeroU16::new(cols.max(1)).unwrap();
+        self.vt.set_size(nz_rows, nz_cols);
     }
 
     pub fn is_alternate_screen(&self) -> bool {
         self.vt.screen().alternate_screen()
+    }
+
+    /// Returns true if the child process inside the PTY has enabled mouse tracking.
+    pub fn wants_mouse(&self) -> bool {
+        !matches!(
+            self.vt.screen().mouse_protocol_mode(),
+            vt100::MouseProtocolMode::None
+        )
+    }
+
+    /// Returns the current scrollback offset (`0` = at live bottom).
+    #[allow(dead_code)]
+    pub fn scrollback(&self) -> usize {
+        self.vt.screen().scrollback()
+    }
+
+    /// Scrolls the primary screen viewport up into history by `lines` rows.
+    pub fn scroll_up(&mut self, lines: usize) {
+        let current = self.vt.screen().scrollback();
+        self.vt
+            .screen_mut()
+            .set_scrollback(current.saturating_add(lines));
+    }
+
+    /// Scrolls the primary screen viewport down toward the live bottom by `lines` rows.
+    pub fn scroll_down(&mut self, lines: usize) {
+        let current = self.vt.screen().scrollback();
+        self.vt
+            .screen_mut()
+            .set_scrollback(current.saturating_sub(lines));
+    }
+
+    /// Resets the scrollback offset to `0` (live bottom).
+    pub fn reset_scrollback(&mut self) {
+        if self.vt.screen().scrollback() > 0 {
+            self.vt.screen_mut().set_scrollback(0);
+        }
     }
 
     /// Processes raw child PTY output bytes through the VT100 parser and returns any synthetic
@@ -53,10 +179,11 @@ impl VtScreenAdapter {
         }
 
         let (cur_row, cur_col) = screen.cursor_position();
+        let scrolled_back = screen.scrollback() > 0;
         buf.cursor = CursorState {
             row: child_rect.y + cur_row.min(child_rect.height.saturating_sub(1)),
             col: child_rect.x + cur_col.min(child_rect.width.saturating_sub(1)),
-            hidden: screen.hide_cursor(),
+            hidden: screen.hide_cursor() || scrolled_back,
         };
     }
 
