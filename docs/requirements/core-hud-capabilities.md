@@ -3,7 +3,7 @@ type: Requirement
 title: "Core Terminal HUD & Compositor Requirements"
 description: "Terminal-emulator-agnostic and shell-agnostic HUD providing bottom status lines, floating top-right overlays, and multi-source widgets."
 tags: [terminal, pty, hud, overlay, ipc, widgets]
-generated: { by: agent/cli, at: "2026-10-22T10:22:50Z" }
+generated: { by: agent/cli, at: "2026-10-22T10:34:30Z" }
 status: stable
 ---
 
@@ -29,8 +29,8 @@ status: stable
      - Supports `trigger = "change"` (default when `interval_ms` is omitted: runs on CWD change and foreground command completion), `trigger = "cwd"` (runs only on CWD change), and `trigger = "interval"` (runs every `interval_ms`).
      - Supports `when_files = ["package.json", ".node-version", ".nvmrc"]` ancestor file detection so project-specific runtime versions (e.g. `node -v`, `rustc -V`) are only executed and displayed when inside a matching project directory.
      - Executes commands asynchronously with `current_dir` set to the child shell's active CWD.
-   - **Metrics, Progress Bars & Stacked Toast Queue via Unix Domain Socket**:
+   - **Metrics, Progress Bars & Floating Toast Stack via Unix Domain Socket**:
      - `thud set` / `thud clear` for named status slots with optional TTL.
      - `thud progress <key> <0..100|done> [--label <txt>]` feeding `sparkline` (`▁▂▃▄▅▆▇█`) and `gauge` (`━━━─── 60%`) widgets.
-     - `thud toast <msg> [--level info|success|warn|error]` pushing to a vertical toast stack at the bottom-right.
+     - `thud toast <msg> [--level info|success|warn|error]` pushing to a configurable floating toast stack (`[toast]` with `anchor`, `margin_x = 2`, `margin_y = 1`, `gap`, `pill`, and `border`).
    - **Hotkeys**: `Ctrl+\` to toggle Zen Mode (hide/show all HUD chrome), and `Ctrl+]` to toggle `dashboard_only` overlays.
