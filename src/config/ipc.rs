@@ -58,6 +58,8 @@ pub enum IpcMessage {
     UpsertOverlay { overlay: OverlayConfig },
     /// Remove a floating overlay by ID.
     RemoveOverlay { id: String },
+    /// Reload the configuration file (`config.toml`) in the active `thud` session.
+    ReloadConfig,
     /// Gracefully terminate the active `thud` session.
     Quit,
 }

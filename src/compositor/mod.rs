@@ -43,6 +43,9 @@ pub enum Event<'a> {
     CommandOutput { id: String, output: String },
     /// Dynamic update received from the Unix domain socket IPC server.
     Ipc(IpcMessage),
+    /// Replaces the active `Config` in-flight, resizing the child PTY if `status_bar` height changed
+    /// and forcing a full screen redraw.
+    ReloadConfig(Config),
 }
 
 /// Deterministic output effects produced by a single `Compositor` transition.
@@ -56,6 +59,8 @@ pub struct Transition {
     pub child_pty_resize: Option<TermSize>,
     /// Periodic shell commands `(id, cmd)` whose schedule is now due for async execution.
     pub due_commands: Vec<(String, String)>,
+    /// True when the user pressed `reload_key` or sent `IpcMessage::ReloadConfig`.
+    pub reload_config: bool,
 }
 
 /// Sans-I/O Deep Module that orchestrates virtual terminal emulation (`VtScreenAdapter`),
@@ -106,6 +111,7 @@ impl Compositor {
                 child_pty_input: Vec::new(),
                 child_pty_resize: Some(child_size),
                 due_commands,
+                reload_config: false,
             },
         ))
     }
@@ -116,10 +122,12 @@ impl Compositor {
         let mut child_pty_input = Vec::new();
         let mut child_pty_resize = None;
         let mut due_commands = Vec::new();
+        let mut reload_config = false;
 
         match event {
             Event::HostInput(bytes) => {
                 let zen_byte = Config::parse_hotkey_byte(self.config.zen_toggle_key.as_deref());
+                let reload_byte = Config::parse_hotkey_byte(self.config.reload_key.as_deref());
 
                 for &b in bytes {
                     if Some(b) == zen_byte {
@@ -127,6 +135,8 @@ impl Compositor {
                         let new_child_size = self.child_size();
                         self.vt.set_size(new_child_size.cols, new_child_size.rows);
                         child_pty_resize = Some(new_child_size);
+                    } else if Some(b) == reload_byte {
+                        reload_config = true;
                     } else {
                         child_pty_input.push(b);
                     }
@@ -158,7 +168,24 @@ impl Compositor {
                 self.store.on_command_output(id, &output);
             }
             Event::Ipc(msg) => {
-                self.store.apply_ipc(msg, now);
+                if msg == IpcMessage::ReloadConfig {
+                    reload_config = true;
+                } else {
+                    self.store.apply_ipc(msg, now);
+                }
+            }
+            Event::ReloadConfig(new_config) => {
+                let old_child_size = self.child_size();
+                self.config = new_config;
+                let new_child_size = self.child_size();
+                if new_child_size != old_child_size {
+                    self.vt.set_size(new_child_size.cols, new_child_size.rows);
+                    child_pty_resize = Some(new_child_size);
+                }
+                self.prev_buffer = None;
+                due_commands = self
+                    .store
+                    .collect_due_commands(&self.config, now, false, false);
             }
         }
 
@@ -168,6 +195,7 @@ impl Compositor {
             child_pty_input,
             child_pty_resize,
             due_commands,
+            reload_config,
         }
     }
 
@@ -914,5 +942,40 @@ mod tests {
         );
         assert!(tx4.due_commands.is_empty());
         assert!(!comp.rendered_text().contains("1.85.0"));
+    }
+
+    #[test]
+    fn reload_key_and_reload_config_event_update_compositor_in_place() {
+        let now = Instant::now();
+        let cfg = Config::default();
+        let (mut comp, _) = Compositor::new(TermSize { cols: 30, rows: 3 }, cfg, now).unwrap();
+
+        // Ctrl+] (0x1d) is intercepted and triggers reload_config without forwarding to child PTY
+        let tx = comp.step(Event::HostInput(b"x\x1dy"), now);
+        assert_eq!(tx.child_pty_input, b"xy");
+        assert!(tx.reload_config);
+
+        // Applying Event::ReloadConfig swaps active configuration and re-renders immediately
+        let updated_cfg = Config::from_toml(
+            r#"
+            [status_bar]
+            separator = " | "
+            left = [{ type = "ipc_slot", key = "msg" }]
+            right = []
+            overlays = []
+        "#,
+        )
+        .unwrap();
+        comp.step(
+            Event::Ipc(IpcMessage::SetSlot {
+                key: "msg".to_string(),
+                value: "RELOADED".to_string(),
+                ttl_ms: None,
+            }),
+            now,
+        );
+        comp.step(Event::ReloadConfig(updated_cfg), now);
+        let last_line = comp.rendered_text().lines().last().unwrap().to_string();
+        assert!(last_line.contains("RELOADED"));
     }
 }

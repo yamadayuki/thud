@@ -7,7 +7,7 @@ pub(crate) mod tty;
 pub use harness::HeadlessHarness;
 
 use crate::compositor::{Compositor, Event, Transition};
-use crate::config::{Config, ConfigError, IpcMessage, TermSize};
+use crate::config::{Config, ConfigError, IpcMessage, TermSize, ToastLevel};
 use crate::session::ipc::OsIpcServer;
 use crate::session::probes::SystemProbes;
 use crate::session::pty::OsChildPty;
@@ -98,6 +98,7 @@ impl Session {
 
         // Immediate initial builtin probe so CWD / Git branch appear on frame 1
         let mut last_tick = now;
+        let mut watched_config_mtime = Self::current_config_mtime();
         let mut probes = SystemProbes::new();
         let builtins = probes.sample(pty.master_fd, pty.child_pid, now);
         let first_tick_tx = compositor.step(
@@ -152,6 +153,16 @@ impl Session {
                     if n > 0 {
                         let tx = compositor.step(Event::HostInput(&buf[..n as usize]), loop_now);
                         Self::apply_os_transition(&tx, &mut host, &mut pty, &cmd_tx)?;
+                        if tx.reload_config {
+                            watched_config_mtime = Self::current_config_mtime();
+                            Self::reload_into_compositor(
+                                &mut compositor,
+                                &mut host,
+                                &mut pty,
+                                &cmd_tx,
+                                loop_now,
+                            )?;
+                        }
                     }
                 }
 
@@ -184,6 +195,16 @@ impl Session {
                 }
                 let tx = compositor.step(Event::Ipc(ipc_msg), loop_now);
                 Self::apply_os_transition(&tx, &mut host, &mut pty, &cmd_tx)?;
+                if tx.reload_config {
+                    watched_config_mtime = Self::current_config_mtime();
+                    Self::reload_into_compositor(
+                        &mut compositor,
+                        &mut host,
+                        &mut pty,
+                        &cmd_tx,
+                        loop_now,
+                    )?;
+                }
             }
             if should_quit {
                 break 0;
@@ -195,9 +216,20 @@ impl Session {
                 Self::apply_os_transition(&tx, &mut host, &mut pty, &cmd_tx)?;
             }
 
-            // 5. Periodic tick (every 250ms) for clock, CWD, Git branch, and command scheduling
+            // 5. Periodic tick (every 250ms) for clock, CWD, Git branch, command scheduling, and config mtime check
             if loop_now.saturating_duration_since(last_tick) >= Duration::from_millis(250) {
                 last_tick = loop_now;
+                let current_mtime = Self::current_config_mtime();
+                if current_mtime != watched_config_mtime {
+                    watched_config_mtime = current_mtime;
+                    Self::reload_into_compositor(
+                        &mut compositor,
+                        &mut host,
+                        &mut pty,
+                        &cmd_tx,
+                        loop_now,
+                    )?;
+                }
                 let builtins = probes.sample(pty.master_fd, pty.child_pid, loop_now);
                 let tx = compositor.step(
                     Event::Tick {
@@ -228,6 +260,40 @@ impl Session {
         msg: &IpcMessage,
     ) -> Result<(), SessionError> {
         ipc::send_ipc_message(socket_path, msg)
+    }
+
+    fn current_config_mtime() -> Option<std::time::SystemTime> {
+        let path = Config::default_path()?;
+        std::fs::metadata(path).ok()?.modified().ok()
+    }
+
+    fn reload_into_compositor(
+        compositor: &mut Compositor,
+        host: &mut OsHostTerminal,
+        pty: &mut OsChildPty,
+        cmd_tx: &Sender<(String, String)>,
+        now: Instant,
+    ) -> io::Result<()> {
+        let tx = match Config::load_or_default() {
+            Ok(new_config) => compositor.step(Event::ReloadConfig(new_config), now),
+            Err(err) => {
+                let first_line = err
+                    .to_string()
+                    .lines()
+                    .next()
+                    .unwrap_or("invalid config")
+                    .to_string();
+                compositor.step(
+                    Event::Ipc(IpcMessage::Toast {
+                        message: first_line,
+                        level: ToastLevel::Error,
+                        ttl_ms: 5000,
+                    }),
+                    now,
+                )
+            }
+        };
+        Self::apply_os_transition(&tx, host, pty, cmd_tx)
     }
 
     fn apply_os_transition(

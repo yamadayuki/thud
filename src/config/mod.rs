@@ -378,6 +378,8 @@ pub struct Config {
     pub ipc_socket: Option<PathBuf>,
     #[serde(default = "default_zen_toggle_key")]
     pub zen_toggle_key: Option<String>,
+    #[serde(default = "default_reload_key")]
+    pub reload_key: Option<String>,
     #[serde(default)]
     pub status_bar: StatusBarConfig,
     #[serde(default)]
@@ -392,6 +394,10 @@ fn default_theme() -> ThemeConfig {
 
 fn default_zen_toggle_key() -> Option<String> {
     Some("ctrl-\\".to_string())
+}
+
+fn default_reload_key() -> Option<String> {
+    Some("ctrl-]".to_string())
 }
 
 fn default_overlays() -> Vec<OverlayConfig> {
@@ -428,6 +434,7 @@ impl Default for Config {
             shell: None,
             ipc_socket: None,
             zen_toggle_key: default_zen_toggle_key(),
+            reload_key: default_reload_key(),
             status_bar: StatusBarConfig::default(),
             toast: ToastConfig::default(),
             overlays: default_overlays(),

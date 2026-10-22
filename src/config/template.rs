@@ -66,6 +66,15 @@ impl Config {
             out.push_str("# zen_toggle_key = \"ctrl-\\\\\"\n");
         }
 
+        out.push_str(
+            "\n# Hotkey to manually reload config.toml (note: saving config.toml also auto-reloads live):\n",
+        );
+        if let Some(key) = &self.reload_key {
+            let _ = writeln!(out, "reload_key = {}", toml_quote(key));
+        } else {
+            out.push_str("# reload_key = \"ctrl-]\"\n");
+        }
+
         // [status_bar] section
         out.push_str(
             "\n# -----------------------------------------------------------------------------\n\

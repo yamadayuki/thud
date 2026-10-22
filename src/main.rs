@@ -90,6 +90,10 @@ fn try_main() -> Result<(), SessionError> {
                 },
             )
         }
+        Some("reload") => {
+            let flags = parse_ipc_flags(&args[1..])?;
+            Session::send_ipc_message(flags.socket, &IpcMessage::ReloadConfig)
+        }
         Some("quit" | "exit") => {
             let flags = parse_ipc_flags(&args[1..])?;
             Session::send_ipc_message(flags.socket, &IpcMessage::Quit)
@@ -150,7 +154,12 @@ fn parse_run_config(args: &[String]) -> Result<Config, SessionError> {
     }
 
     let mut cfg = match config_path {
-        Some(p) => Config::from_file(p)?,
+        Some(p) => {
+            unsafe {
+                std::env::set_var("THUD_CONFIG", p.as_os_str());
+            }
+            Config::from_file(p)?
+        }
         None => Config::load_or_default()?,
     };
     if let Some(sh) = shell_override {
@@ -254,6 +263,7 @@ USAGE:
   thud clear <key>                                           Clear an IPC status slot or metric
   thud progress <key> <0..100|done> [--label <txt>]          Push progress/metric for gauge or sparkline widgets
   thud toast <msg> [--level info|success|warn|error]         Enqueue a stacked toast notification overlay
+  thud reload                                                Reload config.toml in the active thud session
   thud quit                                                  Gracefully exit the active thud session"
     );
 }
