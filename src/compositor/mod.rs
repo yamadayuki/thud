@@ -1,4 +1,5 @@
 pub(crate) mod layout;
+pub(crate) mod painter;
 pub(crate) mod scheduler;
 pub(crate) mod store;
 pub(crate) mod vt;
@@ -6,14 +7,12 @@ pub(crate) mod vt;
 pub use scheduler::{CommandKey, DueCommand};
 
 use crate::compositor::layout::PlacementSolver;
+use crate::compositor::painter::HudPainter;
 use crate::compositor::scheduler::{CommandScheduler, ScheduleContext, watched_markers};
 use crate::compositor::store::{TelemetryStore, TickChanges};
 use crate::compositor::vt::{MouseEventKind, VtScreenAdapter, parse_mouse_event};
-use crate::config::{
-    Anchor, Color, Config, ConfigError, IpcMessage, OverlayConfig, ScreenCondition,
-    StatusBarPosition, TermSize, WidgetSpec,
-};
-use crate::ui::{Block, Buffer, CellStyle, Gauge, Line, Rect, StatusBar, Toast, Widget};
+use crate::config::{Config, ConfigError, IpcMessage, TermSize, WidgetSpec};
+use crate::ui::{Buffer, CellStyle};
 use chrono::{DateTime, Local};
 use std::collections::BTreeSet;
 use std::time::Instant;
@@ -57,7 +56,7 @@ pub enum Event<'a> {
     Ipc(IpcMessage),
     /// Replaces the active `Config` in-flight, resizing the child PTY if `status_bar` height changed
     /// and forcing a full screen redraw.
-    ReloadConfig(Config),
+    ReloadConfig(Box<Config>),
 }
 
 /// Deterministic output effects produced by a single `Compositor` transition.
@@ -248,7 +247,7 @@ impl Compositor {
             }
             Event::ReloadConfig(new_config) => {
                 let old_child_size = self.child_size();
-                self.config = new_config;
+                self.config = *new_config;
                 let new_child_size = self.child_size();
                 if new_child_size != old_child_size {
                     self.vt.set_size(new_child_size.cols, new_child_size.rows);
@@ -319,7 +318,7 @@ impl Compositor {
                 now,
                 cwd_changed: changes.cwd_changed,
                 cmd_finished: changes.cmd_finished,
-                found_markers: &self.store.builtins.found_markers,
+                found_markers: &self.store.builtins().found_markers,
             },
         )
     }
@@ -355,228 +354,23 @@ impl Compositor {
     fn paint_frame(&self, buf: &mut Buffer, now: Instant) {
         let child_rect =
             PlacementSolver::compute_child_rect(self.host_size, &self.config, self.zen_mode);
-        let palette = self.config.theme.palette();
-
-        // 1. Project child virtual terminal screen cells & cursor into `buf`
         self.vt.paint_into_buffer(child_rect, buf);
-
         if self.zen_mode {
             return;
         }
-
-        // 2. Render docked top or bottom status bar if enabled and terminal is tall enough
-        let reserved = self.config.reserved_status_rows();
-        if self.config.status_bar.enabled && self.host_size.rows > reserved && reserved > 0 {
-            let status_row = match self.config.status_bar.position {
-                StatusBarPosition::Bottom => self.host_size.rows - reserved,
-                StatusBarPosition::Top => 0,
-            };
-            let bar_style = CellStyle::new(
-                self.config.status_bar.fg.unwrap_or(palette.bar_fg),
-                self.config.status_bar.bg.unwrap_or(palette.bar_bg),
-                false,
-            );
-            let sep = &self.config.status_bar.separator;
-            let theme = self.config.theme;
-            let bar = StatusBar {
-                base_style: bar_style,
-                left: self.store.build_segment_line(
-                    &self.scheduler,
-                    &self.config.status_bar.left,
-                    sep,
-                    bar_style,
-                    theme,
-                    now,
-                ),
-                center: self.store.build_segment_line(
-                    &self.scheduler,
-                    &self.config.status_bar.center,
-                    sep,
-                    bar_style,
-                    theme,
-                    now,
-                ),
-                right: self.store.build_segment_line(
-                    &self.scheduler,
-                    &self.config.status_bar.right,
-                    sep,
-                    bar_style,
-                    theme,
-                    now,
-                ),
-            };
-            bar.render(Rect::new(0, status_row, self.host_size.cols, reserved), buf);
+        HudPainter {
+            config: &self.config,
+            store: &self.store,
+            commands: &self.scheduler,
+            now,
         }
-
-        // 3. Render floating overlays sorted by z_index
-        let mut overlays: Vec<&OverlayConfig> = self.config.overlays.iter().collect();
-        for dyn_ov in self.store.dynamic_overlays.values() {
-            overlays.push(&dyn_ov.config);
-        }
-        overlays.sort_by_key(|ov| ov.z_index);
-
-        let is_alt = self.vt.is_alternate_screen();
-        for ov in overlays {
-            self.render_overlay(buf, ov, child_rect, is_alt, now);
-        }
-
-        // 4. Render stacked toast notifications and unreferenced progress gauges
-        self.render_toast_stack(buf, child_rect);
-    }
-
-    fn render_overlay(
-        &self,
-        buf: &mut Buffer,
-        ov: &OverlayConfig,
-        child_rect: Rect,
-        is_alt: bool,
-        now: Instant,
-    ) {
-        match ov.screen_mode {
-            ScreenCondition::Always => {}
-            ScreenCondition::PrimaryOnly if is_alt => return,
-            ScreenCondition::AlternateOnly if !is_alt => return,
-            _ => {}
-        }
-
-        let palette = self.config.theme.palette();
-        let base_style = CellStyle::new(
-            ov.fg.unwrap_or(palette.overlay_fg),
-            ov.bg.unwrap_or(palette.overlay_bg),
-            ov.bold,
-        );
-
-        let mut lines: Vec<Line> = Vec::new();
-        for w in &ov.widgets {
-            let evaluated = self.store.evaluate_widget_lines(
-                &self.scheduler,
-                w,
-                base_style,
-                self.config.theme,
-                false,
-                now,
-            );
-            lines.extend(evaluated);
-        }
-        if lines.is_empty() {
-            return;
-        }
-
-        let border_fg = ov.border_fg.or(Some(palette.border_fg));
-        let title_fg = ov.title_fg.or(Some(palette.title_fg));
-        let block = Block::new(ov.border, ov.title.as_deref(), base_style, lines)
-            .with_border_and_title_fg(border_fg, title_fg)
-            .with_padding_x(ov.padding_x);
-        let (box_width, box_height) = block.measure();
-
-        let Some(rect) = PlacementSolver::resolve_overlay_rect(
-            buf,
-            child_rect,
-            ov.anchor,
-            ov.offset_x,
-            ov.offset_y,
-            box_width,
-            box_height,
-            ov.collision,
-        ) else {
-            return;
-        };
-
-        block.render(rect, buf);
-    }
-
-    fn render_toast_stack(&self, buf: &mut Buffer, child_rect: Rect) {
-        let mut items: Vec<(Line, CellStyle)> = Vec::new();
-
-        // 1. Collect any active unreferenced IPC progress metrics (`thud progress <key> <pct>`)
-        for (key, series) in &self.store.metrics {
-            if !series.from_ipc || self.store.is_metric_referenced(&self.config, key) {
-                continue;
-            }
-            let label = series.label.as_deref().unwrap_or(key.as_str());
-            let style = CellStyle::ansi(231, 25, true);
-            let line = Gauge::new(series.latest, 10, Some(label), style)
-                .to_line()
-                .with_affixes(Some(" "), Some(" "), style);
-            items.push((line, style));
-        }
-
-        // 2. Collect stacked toast notifications
-        for toast_entry in self.store.toasts.iter().rev() {
-            let (fg_ansi, bg_ansi, icon) = toast_entry.level.palette();
-            let style = CellStyle::ansi(fg_ansi, bg_ansi, true);
-            let line = Toast {
-                icon,
-                message: &toast_entry.message,
-                style,
-            }
-            .to_line();
-            items.push((line, style));
-        }
-
-        if items.is_empty() {
-            return;
-        }
-
-        let toast_cfg = self.config.toast;
-        let is_top = matches!(
-            toast_cfg.anchor,
-            Anchor::TopRight | Anchor::TopLeft | Anchor::TopCenter
-        );
-        let mut current_row = if is_top {
-            i32::from(child_rect.y) + i32::from(toast_cfg.margin_y)
-        } else {
-            i32::from(child_rect.bottom()) - 1 - i32::from(toast_cfg.margin_y)
-        };
-
-        for (mut line, style) in items {
-            if toast_cfg.pill {
-                line = line.decorate_segment(None, false, true, None, None, style, Color::Default);
-            }
-
-            let block = Block::new(toast_cfg.border, None, style, vec![line]);
-            let (box_w, box_h) = block.measure();
-            if box_w == 0 || box_h == 0 || box_w > child_rect.width {
-                continue;
-            }
-
-            let top_row = if is_top {
-                current_row
-            } else {
-                current_row - i32::from(box_h) + 1
-            };
-            if top_row < i32::from(child_rect.y)
-                || top_row + i32::from(box_h) > i32::from(child_rect.bottom())
-            {
-                break;
-            }
-
-            let col = match toast_cfg.anchor {
-                Anchor::TopRight | Anchor::BottomRight => child_rect
-                    .right()
-                    .saturating_sub(box_w.saturating_add(toast_cfg.margin_x)),
-                Anchor::TopLeft | Anchor::BottomLeft => (child_rect.x + toast_cfg.margin_x)
-                    .min(child_rect.right().saturating_sub(box_w)),
-                Anchor::TopCenter | Anchor::BottomCenter => {
-                    child_rect.x + child_rect.width.saturating_sub(box_w) / 2
-                }
-            };
-
-            block.render(Rect::new(col, top_row as u16, box_w, box_h), buf);
-
-            let step = i32::from(box_h.saturating_add(toast_cfg.gap));
-            if is_top {
-                current_row += step;
-            } else {
-                current_row -= step;
-            }
-        }
+        .paint(buf, child_rect, self.vt.is_alternate_screen());
     }
 }
 
 /// Every widget currently configured: status bar sections, config overlays, and
 /// IPC-injected dynamic overlays.
-fn effective_widgets<'a>(
+pub(crate) fn effective_widgets<'a>(
     config: &'a Config,
     store: &'a TelemetryStore,
 ) -> impl Iterator<Item = &'a WidgetSpec> {
@@ -587,12 +381,7 @@ fn effective_widgets<'a>(
         .chain(&config.status_bar.center)
         .chain(&config.status_bar.right)
         .chain(config.overlays.iter().flat_map(|ov| ov.widgets.iter()))
-        .chain(
-            store
-                .dynamic_overlays
-                .values()
-                .flat_map(|ov| ov.config.widgets.iter()),
-        )
+        .chain(store.dynamic_overlays().flat_map(|ov| ov.widgets.iter()))
 }
 
 #[cfg(test)]
@@ -712,8 +501,9 @@ mod tests {
             "          あい 09:05"
         );
 
-        comp.config.overlays.clear();
-        comp.step(Event::PtyOutput(b""), now);
+        let mut without_overlays = sample_config();
+        without_overlays.overlays.clear();
+        comp.step(Event::ReloadConfig(Box::new(without_overlays)), now);
         assert_eq!(
             comp.rendered_text().lines().next().unwrap(),
             "          あいうえお"
@@ -1123,10 +913,10 @@ mod tests {
         comp.step(finished("uptime", "UP"), t0);
         comp.step(finished("user", "me"), t0);
 
-        let tx = comp.step(Event::ReloadConfig(config("uptime")), t0);
+        let tx = comp.step(Event::ReloadConfig(Box::new(config("uptime"))), t0);
         assert!(tx.due_commands.is_empty());
 
-        let tx = comp.step(Event::ReloadConfig(config("uptime -p")), t0);
+        let tx = comp.step(Event::ReloadConfig(Box::new(config("uptime -p"))), t0);
         assert_eq!(tx.due_commands, vec![due("uptime", "uptime -p")]);
         assert!(comp.rendered_text().contains("me"));
     }
@@ -1205,7 +995,7 @@ mod tests {
             }),
             now,
         );
-        comp.step(Event::ReloadConfig(updated_cfg), now);
+        comp.step(Event::ReloadConfig(Box::new(updated_cfg)), now);
         let rendered = comp.rendered_text();
         let lines: Vec<&str> = rendered.lines().collect();
         assert!(lines[0].contains("RELOADED"));

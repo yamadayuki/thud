@@ -1,4 +1,4 @@
-use crate::config::{CollisionPolicy, Config, StatusBarPosition};
+use crate::config::{CollisionPolicy, Config, StatusBarPosition, ToastConfig};
 use crate::ui::{Anchor, Buffer, Rect, TermSize};
 
 /// Pure geometric solver for child PTY viewport sizing and floating overlay collision avoidance.
@@ -112,6 +112,114 @@ impl PlacementSolver {
         Some(Rect::new(col, row, box_width, box_height))
     }
 
+    /// Places a stack of toast boxes of `sizes` (newest first) inside `child_rect` as one unit:
+    /// toasts wider than the child area are skipped, the stack is cut where it no longer fits
+    /// vertically, and the whole stack avoids collisions according to `toast.collision`.
+    /// Returns the index into `sizes` and target `Rect` of every placed toast.
+    pub fn resolve_toast_stack(
+        buf: &Buffer,
+        child_rect: Rect,
+        toast: &ToastConfig,
+        sizes: &[(u16, u16)],
+    ) -> Vec<(usize, Rect)> {
+        let max_height = child_rect.height.saturating_sub(toast.margin_y);
+        let mut fitting: Vec<(usize, u16, u16)> = Vec::new();
+        let mut stack_height: u16 = 0;
+        for (i, &(w, h)) in sizes.iter().enumerate() {
+            if w == 0 || h == 0 || w > child_rect.width {
+                continue;
+            }
+            let needed = if fitting.is_empty() {
+                h
+            } else {
+                stack_height.saturating_add(toast.gap).saturating_add(h)
+            };
+            if needed > max_height {
+                break;
+            }
+            stack_height = needed;
+            fitting.push((i, w, h));
+        }
+        let Some(stack_width) = fitting.iter().map(|&(_, w, _)| w).max() else {
+            return Vec::new();
+        };
+
+        let margin_x = i16::try_from(toast.margin_x).unwrap_or(i16::MAX);
+        let margin_y = i16::try_from(toast.margin_y).unwrap_or(i16::MAX);
+        let offset_x = match toast.anchor {
+            Anchor::TopRight | Anchor::BottomRight => -margin_x,
+            Anchor::TopLeft | Anchor::BottomLeft => margin_x,
+            Anchor::TopCenter | Anchor::BottomCenter => 0,
+        };
+        let offset_y = if is_top(toast.anchor) {
+            margin_y
+        } else {
+            -margin_y
+        };
+        let Some(stack) = Self::resolve_overlay_rect(
+            buf,
+            child_rect,
+            toast.anchor,
+            offset_x,
+            offset_y,
+            stack_width,
+            stack_height,
+            toast.collision,
+        ) else {
+            return Vec::new();
+        };
+
+        // Lay toasts out toward whichever corner the stack ended up at.
+        let home = Self::resolve_box_anchor(
+            toast.anchor,
+            stack_width,
+            stack_height,
+            child_rect,
+            offset_x,
+            offset_y,
+        );
+        let flipped = toast.anchor.opposite_horizontal();
+        let dodged = Self::resolve_box_anchor(
+            flipped,
+            stack_width,
+            stack_height,
+            child_rect,
+            -offset_x,
+            offset_y,
+        );
+        let anchor = if (stack.y, stack.x) != home && (stack.y, stack.x) == dodged {
+            flipped
+        } else {
+            toast.anchor
+        };
+
+        let mut placed = Vec::with_capacity(fitting.len());
+        let mut row = if is_top(anchor) {
+            stack.y
+        } else {
+            stack.bottom()
+        };
+        for (i, w, h) in fitting {
+            let col = match anchor {
+                Anchor::TopRight | Anchor::BottomRight => stack.right() - w,
+                Anchor::TopLeft | Anchor::BottomLeft => stack.x,
+                Anchor::TopCenter | Anchor::BottomCenter => stack.x + (stack_width - w) / 2,
+            };
+            let top_row = if is_top(anchor) {
+                let top = row;
+                row = row.saturating_add(h).saturating_add(toast.gap);
+                top
+            } else {
+                row = row.saturating_sub(h);
+                let top = row;
+                row = row.saturating_sub(toast.gap);
+                top
+            };
+            placed.push((i, Rect::new(col, top_row, w, h)));
+        }
+        placed
+    }
+
     fn resolve_box_anchor(
         anchor: Anchor,
         width: u16,
@@ -182,5 +290,114 @@ impl PlacementSolver {
             }
         }
         false
+    }
+}
+
+fn is_top(anchor: Anchor) -> bool {
+    matches!(
+        anchor,
+        Anchor::TopRight | Anchor::TopLeft | Anchor::TopCenter
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn toast(anchor: Anchor, collision: CollisionPolicy) -> ToastConfig {
+        ToastConfig {
+            anchor,
+            margin_x: 2,
+            margin_y: 1,
+            gap: 1,
+            collision,
+            ..ToastConfig::default()
+        }
+    }
+
+    fn cursor_at(row: u16, col: u16) -> Buffer {
+        let mut buf = Buffer::new(40, 12);
+        buf.cursor.row = row;
+        buf.cursor.col = col;
+        buf
+    }
+
+    const CHILD: Rect = Rect::new(0, 0, 40, 11);
+    const DODGE: CollisionPolicy = CollisionPolicy::DodgeToOppositeCorner {
+        margin: 1,
+        avoid_text: false,
+    };
+
+    #[test]
+    fn stacks_toasts_upward_from_bottom_right_skipping_and_cutting() {
+        let placed = PlacementSolver::resolve_toast_stack(
+            &cursor_at(0, 0),
+            CHILD,
+            &toast(Anchor::BottomRight, CollisionPolicy::Ignore),
+            &[(10, 1), (50, 1), (6, 3), (8, 4), (8, 4)],
+        );
+        assert_eq!(
+            placed,
+            vec![
+                (0, Rect::new(28, 9, 10, 1)),
+                (2, Rect::new(32, 5, 6, 3)),
+                (3, Rect::new(30, 0, 8, 4)),
+            ],
+            "too-wide toast skipped, newest at the bottom, stack cut when it overflows"
+        );
+    }
+
+    #[test]
+    fn whole_stack_dodges_or_hides_when_the_cursor_approaches() {
+        let sizes = [(10, 1), (6, 1)];
+        let near_bottom_right = cursor_at(9, 35);
+
+        let dodged = PlacementSolver::resolve_toast_stack(
+            &near_bottom_right,
+            CHILD,
+            &toast(Anchor::BottomRight, DODGE),
+            &sizes,
+        );
+        assert_eq!(
+            dodged,
+            vec![(0, Rect::new(2, 9, 10, 1)), (1, Rect::new(2, 7, 6, 1))],
+            "stack moves to the bottom-left and aligns to its new corner"
+        );
+
+        let hidden = PlacementSolver::resolve_toast_stack(
+            &near_bottom_right,
+            CHILD,
+            &toast(
+                Anchor::BottomRight,
+                CollisionPolicy::AutoHide {
+                    margin: 1,
+                    avoid_text: false,
+                },
+            ),
+            &sizes,
+        );
+        assert!(hidden.is_empty());
+
+        let ignored = PlacementSolver::resolve_toast_stack(
+            &near_bottom_right,
+            CHILD,
+            &toast(Anchor::BottomRight, CollisionPolicy::Ignore),
+            &sizes,
+        );
+        assert_eq!(ignored[0].1, Rect::new(28, 9, 10, 1));
+    }
+
+    #[test]
+    fn stacks_downward_from_top_anchors() {
+        let placed = PlacementSolver::resolve_toast_stack(
+            &cursor_at(11, 0),
+            CHILD,
+            &toast(Anchor::TopLeft, DODGE),
+            &[(10, 1), (6, 2)],
+        );
+        assert_eq!(
+            placed,
+            vec![(0, Rect::new(2, 1, 10, 1)), (1, Rect::new(2, 3, 6, 2))]
+        );
     }
 }

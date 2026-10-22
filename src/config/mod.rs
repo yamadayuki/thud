@@ -352,6 +352,9 @@ pub struct ToastConfig {
     pub pill: bool,
     #[serde(default)]
     pub border: BorderStyle,
+    /// How the whole stack avoids the child cursor (and, with `avoid_text`, underlying text).
+    #[serde(default = "default_toast_collision")]
+    pub collision: CollisionPolicy,
 }
 
 fn default_toast_anchor() -> Anchor {
@@ -366,6 +369,13 @@ fn default_toast_margin_y() -> u16 {
     1
 }
 
+fn default_toast_collision() -> CollisionPolicy {
+    CollisionPolicy::DodgeToOppositeCorner {
+        margin: 1,
+        avoid_text: false,
+    }
+}
+
 impl Default for ToastConfig {
     fn default() -> Self {
         Self {
@@ -375,6 +385,7 @@ impl Default for ToastConfig {
             gap: 0,
             pill: false,
             border: BorderStyle::None,
+            collision: default_toast_collision(),
         }
     }
 }

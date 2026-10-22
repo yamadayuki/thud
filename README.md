@@ -193,6 +193,7 @@ margin_y = 1
 gap = 0
 pill = false
 border = "none"
+collision = { mode = "dodge_to_opposite_corner", margin = 1, avoid_text = false }
 
 [[overlays]]
 id = "clock"

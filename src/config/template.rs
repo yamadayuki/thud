@@ -23,7 +23,9 @@ impl Config {
              #   theme = { preset = \"tokyo_night\", bar_bg = \"transparent\", overlay_bg = \"#24283b@0.8\", cwd_bg = \"#7aa2f7\" }\n\
              # Available theme override keys:\n\
              #   bar_fg, bar_bg, overlay_fg, overlay_bg, border_fg, title_fg, track_fg,\n\
-             #   cwd_fg, cwd_bg, git_fg, git_bg, cmd_fg, cmd_bg, metric_fg, metric_bg\n",
+             #   cwd_fg, cwd_bg, git_fg, git_bg, cmd_fg, cmd_bg, metric_fg, metric_bg,\n\
+             #   toast_info_fg, toast_info_bg, toast_success_fg, toast_success_bg,\n\
+             #   toast_warn_fg, toast_warn_bg, toast_error_fg, toast_error_bg, progress_fg, progress_bg\n",
         );
         let _ = writeln!(out, "theme = {}", format_inline_value(&self.theme));
 
@@ -162,6 +164,8 @@ impl Config {
              # Floating Toast & Progress Notification Stack (`thud toast`, `thud progress`)\n\
              # `margin_x` and `margin_y` float notifications away from the terminal edges\n\
              # and the bottom status bar; `gap` adds vertical spacing between stacked toasts.\n\
+             # `collision` moves (or hides) the whole stack when the cursor comes near; it\n\
+             # takes the same modes as overlays (`ignore` / `auto_hide` / `dodge_to_opposite_corner`).\n\
              # -----------------------------------------------------------------------------\n\
              [toast]\n",
         );
@@ -171,6 +175,11 @@ impl Config {
         let _ = writeln!(out, "gap = {}", self.toast.gap);
         let _ = writeln!(out, "pill = {}", self.toast.pill);
         let _ = writeln!(out, "border = {}", format_inline_value(&self.toast.border));
+        let _ = writeln!(
+            out,
+            "collision = {}",
+            format_inline_value(&self.toast.collision)
+        );
 
         // [[overlays]] section
         out.push_str(

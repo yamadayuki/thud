@@ -177,7 +177,7 @@ impl<Io: SessionIo> SessionLoop<Io> {
     /// Reloads the config source in place, or shows its first error line as a toast.
     fn reload(&mut self, now: Instant) -> io::Result<()> {
         let event = match self.io.load_config() {
-            Ok(config) => Event::ReloadConfig(config),
+            Ok(config) => Event::ReloadConfig(Box::new(config)),
             Err(err) => Event::Ipc(IpcMessage::Toast {
                 message: err
                     .to_string()

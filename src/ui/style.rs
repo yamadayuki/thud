@@ -286,6 +286,13 @@ pub struct ThemePalette {
     pub git_accent: (Color, Color),
     pub cmd_accent: (Color, Color),
     pub metric_accent: (Color, Color),
+    /// `(fg, bg)` of `info` / `success` / `warn` / `error` toasts.
+    pub toast_info: (Color, Color),
+    pub toast_success: (Color, Color),
+    pub toast_warn: (Color, Color),
+    pub toast_error: (Color, Color),
+    /// `(fg, bg)` of IPC progress gauges shown in the toast stack.
+    pub progress: (Color, Color),
 }
 
 impl ThemePreset {
@@ -303,6 +310,11 @@ impl ThemePreset {
                 git_accent: (Color::Ansi(0), Color::Ansi(2)),
                 cmd_accent: (Color::Ansi(0), Color::Ansi(3)),
                 metric_accent: (Color::Ansi(6), Color::Default),
+                toast_info: (Color::Ansi(231), Color::Ansi(24)),
+                toast_success: (Color::Ansi(231), Color::Ansi(28)),
+                toast_warn: (Color::Ansi(232), Color::Ansi(214)),
+                toast_error: (Color::Ansi(231), Color::Ansi(160)),
+                progress: (Color::Ansi(231), Color::Ansi(25)),
             },
             ThemePreset::TokyoNight => ThemePalette {
                 bar_fg: Color::Rgb(192, 202, 245),
@@ -316,6 +328,11 @@ impl ThemePreset {
                 git_accent: (Color::Rgb(26, 27, 38), Color::Rgb(187, 154, 247)),
                 cmd_accent: (Color::Rgb(26, 27, 38), Color::Rgb(255, 158, 100)),
                 metric_accent: (Color::Rgb(125, 207, 255), Color::Rgb(36, 40, 59)),
+                toast_info: (Color::Rgb(26, 27, 38), Color::Rgb(122, 162, 247)),
+                toast_success: (Color::Rgb(26, 27, 38), Color::Rgb(158, 206, 106)),
+                toast_warn: (Color::Rgb(26, 27, 38), Color::Rgb(224, 175, 104)),
+                toast_error: (Color::Rgb(26, 27, 38), Color::Rgb(247, 118, 142)),
+                progress: (Color::Rgb(26, 27, 38), Color::Rgb(125, 207, 255)),
             },
             ThemePreset::Catppuccin => ThemePalette {
                 bar_fg: Color::Rgb(205, 214, 244),
@@ -329,6 +346,11 @@ impl ThemePreset {
                 git_accent: (Color::Rgb(17, 17, 27), Color::Rgb(166, 227, 161)),
                 cmd_accent: (Color::Rgb(17, 17, 27), Color::Rgb(250, 179, 135)),
                 metric_accent: (Color::Rgb(148, 226, 213), Color::Rgb(49, 50, 68)),
+                toast_info: (Color::Rgb(17, 17, 27), Color::Rgb(137, 180, 250)),
+                toast_success: (Color::Rgb(17, 17, 27), Color::Rgb(166, 227, 161)),
+                toast_warn: (Color::Rgb(17, 17, 27), Color::Rgb(249, 226, 175)),
+                toast_error: (Color::Rgb(17, 17, 27), Color::Rgb(243, 139, 168)),
+                progress: (Color::Rgb(17, 17, 27), Color::Rgb(116, 199, 236)),
             },
             ThemePreset::Cyberpunk => ThemePalette {
                 bar_fg: Color::Rgb(0, 240, 255),
@@ -342,6 +364,11 @@ impl ThemePreset {
                 git_accent: (Color::Rgb(255, 255, 255), Color::Rgb(255, 0, 127)),
                 cmd_accent: (Color::Rgb(13, 2, 33), Color::Rgb(252, 238, 10)),
                 metric_accent: (Color::Rgb(0, 255, 102), Color::Rgb(22, 6, 54)),
+                toast_info: (Color::Rgb(13, 2, 33), Color::Rgb(0, 240, 255)),
+                toast_success: (Color::Rgb(13, 2, 33), Color::Rgb(0, 255, 102)),
+                toast_warn: (Color::Rgb(13, 2, 33), Color::Rgb(252, 238, 10)),
+                toast_error: (Color::Rgb(255, 255, 255), Color::Rgb(255, 0, 60)),
+                progress: (Color::Rgb(255, 255, 255), Color::Rgb(255, 0, 127)),
             },
             ThemePreset::Nord => ThemePalette {
                 bar_fg: Color::Rgb(216, 222, 233),
@@ -355,6 +382,11 @@ impl ThemePreset {
                 git_accent: (Color::Rgb(46, 52, 64), Color::Rgb(163, 190, 140)),
                 cmd_accent: (Color::Rgb(46, 52, 64), Color::Rgb(235, 203, 139)),
                 metric_accent: (Color::Rgb(136, 192, 208), Color::Rgb(67, 76, 94)),
+                toast_info: (Color::Rgb(46, 52, 64), Color::Rgb(129, 161, 193)),
+                toast_success: (Color::Rgb(46, 52, 64), Color::Rgb(163, 190, 140)),
+                toast_warn: (Color::Rgb(46, 52, 64), Color::Rgb(235, 203, 139)),
+                toast_error: (Color::Rgb(236, 239, 244), Color::Rgb(191, 97, 106)),
+                progress: (Color::Rgb(46, 52, 64), Color::Rgb(136, 192, 208)),
             },
             ThemePreset::Gruvbox => ThemePalette {
                 bar_fg: Color::Rgb(235, 219, 178),
@@ -368,6 +400,11 @@ impl ThemePreset {
                 git_accent: (Color::Rgb(40, 40, 40), Color::Rgb(184, 187, 38)),
                 cmd_accent: (Color::Rgb(40, 40, 40), Color::Rgb(254, 128, 25)),
                 metric_accent: (Color::Rgb(250, 189, 47), Color::Rgb(60, 56, 54)),
+                toast_info: (Color::Rgb(40, 40, 40), Color::Rgb(131, 165, 152)),
+                toast_success: (Color::Rgb(40, 40, 40), Color::Rgb(184, 187, 38)),
+                toast_warn: (Color::Rgb(40, 40, 40), Color::Rgb(250, 189, 47)),
+                toast_error: (Color::Rgb(40, 40, 40), Color::Rgb(251, 73, 52)),
+                progress: (Color::Rgb(40, 40, 40), Color::Rgb(142, 192, 124)),
             },
             ThemePreset::GitHubDark => ThemePalette {
                 bar_fg: Color::Rgb(201, 209, 217),
@@ -381,6 +418,11 @@ impl ThemePreset {
                 git_accent: (Color::Rgb(13, 17, 23), Color::Rgb(63, 185, 80)),
                 cmd_accent: (Color::Rgb(13, 17, 23), Color::Rgb(240, 136, 62)),
                 metric_accent: (Color::Rgb(188, 140, 255), Color::Rgb(22, 27, 34)),
+                toast_info: (Color::Rgb(13, 17, 23), Color::Rgb(88, 166, 255)),
+                toast_success: (Color::Rgb(13, 17, 23), Color::Rgb(63, 185, 80)),
+                toast_warn: (Color::Rgb(13, 17, 23), Color::Rgb(210, 153, 34)),
+                toast_error: (Color::Rgb(255, 255, 255), Color::Rgb(248, 81, 73)),
+                progress: (Color::Rgb(13, 17, 23), Color::Rgb(188, 140, 255)),
             },
         }
     }
@@ -407,6 +449,16 @@ pub struct ThemeConfig {
     pub cmd_bg: Option<Color>,
     pub metric_fg: Option<Color>,
     pub metric_bg: Option<Color>,
+    pub toast_info_fg: Option<Color>,
+    pub toast_info_bg: Option<Color>,
+    pub toast_success_fg: Option<Color>,
+    pub toast_success_bg: Option<Color>,
+    pub toast_warn_fg: Option<Color>,
+    pub toast_warn_bg: Option<Color>,
+    pub toast_error_fg: Option<Color>,
+    pub toast_error_bg: Option<Color>,
+    pub progress_fg: Option<Color>,
+    pub progress_bg: Option<Color>,
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
@@ -443,6 +495,26 @@ struct ThemeTableRepr {
     metric_fg: Option<Color>,
     #[serde(skip_serializing_if = "Option::is_none")]
     metric_bg: Option<Color>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    toast_info_fg: Option<Color>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    toast_info_bg: Option<Color>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    toast_success_fg: Option<Color>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    toast_success_bg: Option<Color>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    toast_warn_fg: Option<Color>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    toast_warn_bg: Option<Color>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    toast_error_fg: Option<Color>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    toast_error_bg: Option<Color>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    progress_fg: Option<Color>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    progress_bg: Option<Color>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -479,6 +551,16 @@ impl From<ThemeConfigRepr> for ThemeConfig {
                 cmd_bg: t.cmd_bg,
                 metric_fg: t.metric_fg,
                 metric_bg: t.metric_bg,
+                toast_info_fg: t.toast_info_fg,
+                toast_info_bg: t.toast_info_bg,
+                toast_success_fg: t.toast_success_fg,
+                toast_success_bg: t.toast_success_bg,
+                toast_warn_fg: t.toast_warn_fg,
+                toast_warn_bg: t.toast_warn_bg,
+                toast_error_fg: t.toast_error_fg,
+                toast_error_bg: t.toast_error_bg,
+                progress_fg: t.progress_fg,
+                progress_bg: t.progress_bg,
             },
         }
     }
@@ -506,6 +588,16 @@ impl From<ThemeConfig> for ThemeConfigRepr {
                 cmd_bg: cfg.cmd_bg,
                 metric_fg: cfg.metric_fg,
                 metric_bg: cfg.metric_bg,
+                toast_info_fg: cfg.toast_info_fg,
+                toast_info_bg: cfg.toast_info_bg,
+                toast_success_fg: cfg.toast_success_fg,
+                toast_success_bg: cfg.toast_success_bg,
+                toast_warn_fg: cfg.toast_warn_fg,
+                toast_warn_bg: cfg.toast_warn_bg,
+                toast_error_fg: cfg.toast_error_fg,
+                toast_error_bg: cfg.toast_error_bg,
+                progress_fg: cfg.progress_fg,
+                progress_bg: cfg.progress_bg,
             })
         }
     }
@@ -530,6 +622,16 @@ impl ThemeConfig {
             cmd_bg: None,
             metric_fg: None,
             metric_bg: None,
+            toast_info_fg: None,
+            toast_info_bg: None,
+            toast_success_fg: None,
+            toast_success_bg: None,
+            toast_warn_fg: None,
+            toast_warn_bg: None,
+            toast_error_fg: None,
+            toast_error_bg: None,
+            progress_fg: None,
+            progress_bg: None,
         }
     }
 
@@ -549,6 +651,16 @@ impl ThemeConfig {
             || self.cmd_bg.is_some()
             || self.metric_fg.is_some()
             || self.metric_bg.is_some()
+            || self.toast_info_fg.is_some()
+            || self.toast_info_bg.is_some()
+            || self.toast_success_fg.is_some()
+            || self.toast_success_bg.is_some()
+            || self.toast_warn_fg.is_some()
+            || self.toast_warn_bg.is_some()
+            || self.toast_error_fg.is_some()
+            || self.toast_error_bg.is_some()
+            || self.progress_fg.is_some()
+            || self.progress_bg.is_some()
     }
 
     /// Resolves the final `ThemePalette` by applying any user overrides on top of `self.preset.palette()`.
@@ -598,6 +710,36 @@ impl ThemeConfig {
         }
         if let Some(c) = self.metric_bg {
             p.metric_accent.1 = c;
+        }
+        if let Some(c) = self.toast_info_fg {
+            p.toast_info.0 = c;
+        }
+        if let Some(c) = self.toast_info_bg {
+            p.toast_info.1 = c;
+        }
+        if let Some(c) = self.toast_success_fg {
+            p.toast_success.0 = c;
+        }
+        if let Some(c) = self.toast_success_bg {
+            p.toast_success.1 = c;
+        }
+        if let Some(c) = self.toast_warn_fg {
+            p.toast_warn.0 = c;
+        }
+        if let Some(c) = self.toast_warn_bg {
+            p.toast_warn.1 = c;
+        }
+        if let Some(c) = self.toast_error_fg {
+            p.toast_error.0 = c;
+        }
+        if let Some(c) = self.toast_error_bg {
+            p.toast_error.1 = c;
+        }
+        if let Some(c) = self.progress_fg {
+            p.progress.0 = c;
+        }
+        if let Some(c) = self.progress_bg {
+            p.progress.1 = c;
         }
         p
     }

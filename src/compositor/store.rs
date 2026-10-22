@@ -1,7 +1,5 @@
 use crate::compositor::BuiltinValues;
-use crate::compositor::scheduler::CommandScheduler;
-use crate::config::{Config, IpcMessage, OverlayConfig, ToastLevel, WidgetKind, WidgetSpec};
-use crate::ui::{CellStyle, Color, Gauge, Line, Span, Sparkline, ThemeConfig, ThemePalette};
+use crate::config::{IpcMessage, OverlayConfig, ToastLevel};
 use chrono::{DateTime, Local};
 use std::collections::{BTreeMap, VecDeque};
 use std::time::{Duration, Instant};
@@ -10,9 +8,9 @@ const MAX_METRIC_HISTORY: usize = 64;
 const MAX_TOAST_STACK: usize = 5;
 
 #[derive(Debug, Clone)]
-pub(crate) struct SlotEntry {
-    pub value: String,
-    pub expires_at: Option<Instant>,
+struct SlotEntry {
+    value: String,
+    expires_at: Option<Instant>,
 }
 
 #[derive(Debug, Clone)]
@@ -32,9 +30,9 @@ pub(crate) struct ToastEntry {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct DynamicOverlayEntry {
-    pub config: OverlayConfig,
-    pub expires_at: Option<Instant>,
+struct DynamicOverlayEntry {
+    config: OverlayConfig,
+    expires_at: Option<Instant>,
 }
 
 /// Environment changes observed by a tick that can make event-driven commands due.
@@ -47,13 +45,13 @@ pub(crate) struct TickChanges {
 /// In-memory state store inside `Compositor` holding TTL slots, metric series,
 /// toast notification queues, dynamic overlays, and foreground command timers.
 pub(crate) struct TelemetryStore {
-    pub wall_clock: DateTime<Local>,
-    pub builtins: BuiltinValues,
-    pub active_fg_cmd: Option<(String, Instant)>,
-    pub ipc_slots: BTreeMap<String, SlotEntry>,
-    pub metrics: BTreeMap<String, MetricSeries>,
-    pub toasts: VecDeque<ToastEntry>,
-    pub dynamic_overlays: BTreeMap<String, DynamicOverlayEntry>,
+    wall_clock: DateTime<Local>,
+    builtins: BuiltinValues,
+    active_fg_cmd: Option<(String, Instant)>,
+    ipc_slots: BTreeMap<String, SlotEntry>,
+    metrics: BTreeMap<String, MetricSeries>,
+    toasts: VecDeque<ToastEntry>,
+    dynamic_overlays: BTreeMap<String, DynamicOverlayEntry>,
 }
 
 impl TelemetryStore {
@@ -181,200 +179,40 @@ impl TelemetryStore {
         }
     }
 
-    /// Resolves the `(fg, bg)` accent colors for a widget from `theme` when the user has not
-    /// explicitly set `spec.style.fg` or `spec.style.bg`.
-    fn resolve_widget_style(
-        spec: &WidgetSpec,
-        fallback_style: CellStyle,
-        theme: ThemeConfig,
-        in_status_bar: bool,
-    ) -> CellStyle {
-        let palette: ThemePalette = theme.palette();
-        let (default_fg, default_bg) = if in_status_bar {
-            match &spec.kind {
-                WidgetKind::Cwd => palette.cwd_accent,
-                WidgetKind::GitBranch => palette.git_accent,
-                WidgetKind::ActiveCommand { .. } => palette.cmd_accent,
-                WidgetKind::Sparkline { .. } | WidgetKind::Gauge { .. } => palette.metric_accent,
-                _ => (fallback_style.fg, fallback_style.bg),
-            }
-        } else {
-            (fallback_style.fg, fallback_style.bg)
-        };
-
-        CellStyle {
-            fg: spec.style.fg.unwrap_or(default_fg),
-            bg: spec.style.bg.unwrap_or(default_bg),
-            bold: spec.style.bold.unwrap_or(fallback_style.bold),
-            italic: fallback_style.italic,
-            underline: fallback_style.underline,
-            inverse: fallback_style.inverse,
-        }
+    pub fn wall_clock(&self) -> DateTime<Local> {
+        self.wall_clock
     }
 
-    /// Evaluates a single `WidgetSpec` into one or more styled `Line`s using `src/ui/` components.
-    pub fn evaluate_widget_lines(
-        &self,
-        commands: &CommandScheduler,
-        spec: &WidgetSpec,
-        fallback_style: CellStyle,
-        theme: ThemeConfig,
-        in_status_bar: bool,
-        now: Instant,
-    ) -> Vec<Line> {
-        let seg_style = Self::resolve_widget_style(spec, fallback_style, theme, in_status_bar);
-        let outer_bg = fallback_style.bg;
-        let icon = spec.style.icon.as_deref();
-        let padding = spec.style.padding.unwrap_or(false);
-        let pill = spec.style.pill.unwrap_or(false);
-        let prefix = spec.style.prefix.as_deref();
-        let suffix = spec.style.suffix.as_deref();
-        let track_fg = spec.style.track_fg.or(Some(theme.palette().track_fg));
-
-        match &spec.kind {
-            WidgetKind::Sparkline {
-                key, width, label, ..
-            } => {
-                let Some(series) = self.metrics.get(key) else {
-                    return Vec::new();
-                };
-                let effective_label = series.label.as_deref().or(label.as_deref());
-                let line = Sparkline::new(&series.history, *width, effective_label, seg_style)
-                    .to_line()
-                    .decorate_segment(icon, padding, pill, prefix, suffix, seg_style, outer_bg);
-                if line.is_empty() {
-                    Vec::new()
-                } else {
-                    vec![line]
-                }
-            }
-            WidgetKind::Gauge {
-                key, width, label, ..
-            } => {
-                let Some(series) = self.metrics.get(key) else {
-                    return Vec::new();
-                };
-                let effective_label = series.label.as_deref().or(label.as_deref());
-                let line = Gauge::new(series.latest, *width, effective_label, seg_style)
-                    .with_track_fg(track_fg)
-                    .to_line()
-                    .decorate_segment(icon, padding, pill, prefix, suffix, seg_style, outer_bg);
-                if line.is_empty() {
-                    Vec::new()
-                } else {
-                    vec![line]
-                }
-            }
-            WidgetKind::ActiveCommand { min_secs } => {
-                let Some((name, started)) = &self.active_fg_cmd else {
-                    return Vec::new();
-                };
-                let secs = now.saturating_duration_since(*started).as_secs();
-                if secs < *min_secs {
-                    return Vec::new();
-                }
-                let effective_icon = icon.or(Some("⚙"));
-                let line = Line::new(vec![Span::styled(format!("{name} ({secs}s)"), seg_style)])
-                    .decorate_segment(
-                        effective_icon,
-                        padding,
-                        pill,
-                        prefix,
-                        suffix,
-                        seg_style,
-                        outer_bg,
-                    );
-                vec![line]
-            }
-            other => {
-                let raw = match other {
-                    WidgetKind::Clock { format } => self.wall_clock.format(format).to_string(),
-                    WidgetKind::Cwd => self.builtins.cwd.clone().unwrap_or_default(),
-                    WidgetKind::GitBranch => self.builtins.git_branch.clone().unwrap_or_default(),
-                    WidgetKind::Text { text } => text.clone(),
-                    WidgetKind::Command { id, .. } => {
-                        commands.output(id).unwrap_or_default().to_string()
-                    }
-                    WidgetKind::IpcSlot { key } => self
-                        .ipc_slots
-                        .get(key)
-                        .map(|s| s.value.clone())
-                        .unwrap_or_default(),
-                    WidgetKind::Sparkline { .. }
-                    | WidgetKind::Gauge { .. }
-                    | WidgetKind::ActiveCommand { .. } => unreachable!(),
-                };
-
-                if raw.is_empty() {
-                    return Vec::new();
-                }
-
-                raw.lines()
-                    .map(|l| {
-                        Line::styled(l, seg_style).decorate_segment(
-                            icon, padding, pill, prefix, suffix, seg_style, outer_bg,
-                        )
-                    })
-                    .collect()
-            }
-        }
+    pub fn builtins(&self) -> &BuiltinValues {
+        &self.builtins
     }
 
-    /// Concatenates a group of status bar `WidgetSpec`s into a single composite `Line` separated by `sep`.
-    pub fn build_segment_line(
-        &self,
-        commands: &CommandScheduler,
-        specs: &[WidgetSpec],
-        sep: &str,
-        bar_style: CellStyle,
-        theme: ThemeConfig,
-        now: Instant,
-    ) -> Line {
-        let mut out = Line::default();
-        for spec in specs {
-            let Some(first_line) = self
-                .evaluate_widget_lines(commands, spec, bar_style, theme, true, now)
-                .into_iter()
-                .next()
-            else {
-                continue;
-            };
-            if first_line.is_empty() {
-                continue;
-            }
-            if !out.is_empty() && !sep.is_empty() {
-                out.push_span(Span::styled(sep, bar_style));
-            }
-            out.spans.extend(first_line.spans);
-        }
-        out
+    /// Name and start time of the current foreground command, if any.
+    pub fn active_command(&self) -> Option<(&str, Instant)> {
+        self.active_fg_cmd
+            .as_ref()
+            .map(|(name, started)| (name.as_str(), *started))
     }
 
-    pub fn is_metric_referenced(&self, config: &Config, target_key: &str) -> bool {
-        let all_widgets = config
-            .status_bar
-            .left
-            .iter()
-            .chain(config.status_bar.center.iter())
-            .chain(config.status_bar.right.iter())
-            .chain(config.overlays.iter().flat_map(|ov| ov.widgets.iter()))
-            .chain(
-                self.dynamic_overlays
-                    .values()
-                    .flat_map(|ov| ov.config.widgets.iter()),
-            );
+    pub fn slot(&self, key: &str) -> Option<&str> {
+        self.ipc_slots.get(key).map(|s| s.value.as_str())
+    }
 
-        for w in all_widgets {
-            match &w.kind {
-                WidgetKind::Sparkline { key, .. } | WidgetKind::Gauge { key, .. }
-                    if key == target_key =>
-                {
-                    return true;
-                }
-                _ => {}
-            }
-        }
-        false
+    pub fn metric(&self, key: &str) -> Option<&MetricSeries> {
+        self.metrics.get(key)
+    }
+
+    pub fn metrics(&self) -> impl Iterator<Item = (&str, &MetricSeries)> {
+        self.metrics.iter().map(|(k, v)| (k.as_str(), v))
+    }
+
+    /// Active toasts, oldest first.
+    pub fn toasts(&self) -> impl DoubleEndedIterator<Item = &ToastEntry> {
+        self.toasts.iter()
+    }
+
+    pub fn dynamic_overlays(&self) -> impl Iterator<Item = &OverlayConfig> {
+        self.dynamic_overlays.values().map(|ov| &ov.config)
     }
 
     fn update_fg_telemetry(&mut self, current_fg: &Option<String>, now: Instant) {
@@ -401,6 +239,3 @@ impl TelemetryStore {
             .retain(|_, entry| entry.expires_at.is_none_or(|exp| exp > now));
     }
 }
-
-/// Suppress unused import warning when `Color` is used through `CellStyle`
-const _: Option<Color> = None;
