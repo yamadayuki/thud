@@ -1,7 +1,7 @@
 pub mod ipc;
 pub mod template;
 
-pub use crate::ui::{Anchor, BorderStyle, CellStyle, Color, TermSize};
+pub use crate::ui::{Anchor, BorderStyle, CellStyle, Color, TermSize, ThemePalette, ThemePreset};
 pub use ipc::{IpcMessage, ToastLevel};
 
 use serde::{Deserialize, Serialize};
@@ -57,15 +57,23 @@ pub enum ScreenCondition {
     DashboardOnly,
 }
 
-/// Optional per-widget segment styling and capsule/powerline affixes.
+/// Per-widget segment styling, icon, capsule (`pill` / `padding`), and affix options.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct SegmentFormat {
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub fg_ansi: Option<u8>,
+    pub fg: Option<Color>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub bg_ansi: Option<u8>,
+    pub bg: Option<Color>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bold: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pill: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub padding: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub track_fg: Option<Color>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prefix: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -168,10 +176,10 @@ pub struct StatusBarConfig {
     pub height: u16,
     #[serde(default = "default_separator")]
     pub separator: String,
-    #[serde(default = "default_status_fg")]
-    pub fg_ansi: u8,
-    #[serde(default = "default_status_bg")]
-    pub bg_ansi: u8,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fg: Option<Color>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bg: Option<Color>,
     #[serde(default)]
     pub left: Vec<WidgetSpec>,
     #[serde(default)]
@@ -192,22 +200,14 @@ fn default_separator() -> String {
     " │ ".to_string()
 }
 
-fn default_status_fg() -> u8 {
-    255 // Bright white in 256-color palette
-}
-
-fn default_status_bg() -> u8 {
-    236 // Dark charcoal gray in 256-color palette
-}
-
 impl Default for StatusBarConfig {
     fn default() -> Self {
         Self {
             enabled: true,
             height: 1,
             separator: default_separator(),
-            fg_ansi: default_status_fg(),
-            bg_ansi: default_status_bg(),
+            fg: None,
+            bg: None,
             left: vec![
                 WidgetSpec::new(WidgetKind::Cwd),
                 WidgetSpec::new(WidgetKind::GitBranch),
@@ -222,7 +222,7 @@ impl Default for StatusBarConfig {
     }
 }
 
-/// Floating non-destructive overlay configuration (e.g., top-right clock or bordered HUD panel).
+/// Floating non-destructive overlay configuration (e.g., top-right clock or multi-widget bordered HUD panel).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OverlayConfig {
     pub id: String,
@@ -242,28 +242,28 @@ pub struct OverlayConfig {
     pub border: BorderStyle,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
-    #[serde(default = "default_overlay_fg")]
-    pub fg_ansi: u8,
-    #[serde(default = "default_overlay_bg")]
-    pub bg_ansi: u8,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fg: Option<Color>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bg: Option<Color>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub border_fg: Option<Color>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title_fg: Option<Color>,
+    #[serde(default)]
+    pub padding_x: u16,
     #[serde(default = "default_true")]
     pub bold: bool,
-    pub widget: WidgetSpec,
+    pub widgets: Vec<WidgetSpec>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ttl_ms: Option<u64>,
-}
-
-fn default_overlay_fg() -> u8 {
-    231
-}
-
-fn default_overlay_bg() -> u8 {
-    238
 }
 
 /// Top-level declarative configuration for a `thud` session.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Config {
+    #[serde(default)]
+    pub theme: ThemePreset,
     #[serde(default)]
     pub shell: Option<String>,
     #[serde(default)]
@@ -300,12 +300,15 @@ fn default_overlays() -> Vec<OverlayConfig> {
         },
         border: BorderStyle::None,
         title: None,
-        fg_ansi: default_overlay_fg(),
-        bg_ansi: default_overlay_bg(),
+        fg: None,
+        bg: None,
+        border_fg: None,
+        title_fg: None,
+        padding_x: 0,
         bold: true,
-        widget: WidgetSpec::new(WidgetKind::Clock {
+        widgets: vec![WidgetSpec::new(WidgetKind::Clock {
             format: " %H:%M:%S ".to_string(),
-        }),
+        })],
         ttl_ms: None,
     }]
 }
@@ -313,6 +316,7 @@ fn default_overlays() -> Vec<OverlayConfig> {
 impl Default for Config {
     fn default() -> Self {
         Self {
+            theme: ThemePreset::Default,
             shell: None,
             ipc_socket: None,
             zen_toggle_key: default_zen_toggle_key(),
@@ -471,46 +475,63 @@ mod tests {
     }
 
     #[test]
-    fn parses_custom_toml_with_segment_styles_borders_sparkline_and_gauge() {
-        let toml_input = r#"
+    fn parses_custom_toml_with_themes_colors_multi_widget_overlays_and_pills() {
+        let toml_input = r##"
+            theme = "tokyo_night"
             shell = "/bin/zsh"
             zen_toggle_key = "ctrl-g"
 
             [status_bar]
             enabled = true
             height = 1
-            separator = ""
+            separator = " "
+            fg = "#c0caf5"
+            bg = "#1a1b26"
             left = [
-                { type = "cwd", fg_ansi = 231, bg_ansi = 24, bold = true, prefix = " ", suffix = " " },
-                { type = "git_branch", fg_ansi = 232, bg_ansi = 148, prefix = " ", suffix = " " },
+                { type = "cwd", fg = "black", bg = "cyan", bold = true, icon = "📁", padding = true },
+                { type = "git_branch", fg = 232, bg = "#a6e3a1", pill = true, icon = "🌿" },
                 { type = "sparkline", key = "cpu", width = 6 }
             ]
             right = [
-                { type = "gauge", key = "build", width = 8, label = "Build" },
-                { type = "battery" }
+                { type = "gauge", key = "build", width = 8, label = "Build", track_fg = "dark_gray" },
+                { type = "battery", padding = true }
             ]
 
             [[overlays]]
             id = "top_panel"
             anchor = "top_right"
             border = "rounded"
-            title = " CLOCK "
+            title = " HUD "
+            border_fg = "cyan"
+            title_fg = "#f9e2af"
+            padding_x = 1
             collision = { mode = "auto_hide", margin = 2 }
-            widget = { type = "clock", format = "%H:%M" }
-        "#;
+            widgets = [
+                { type = "clock", format = "%H:%M" },
+                { type = "sparkline", key = "cpu", width = 6 }
+            ]
+        "##;
 
         let cfg = Config::from_toml(toml_input).expect("valid TOML");
+        assert_eq!(cfg.theme, ThemePreset::TokyoNight);
         assert_eq!(cfg.shell.as_deref(), Some("/bin/zsh"));
         assert_eq!(
             Config::parse_hotkey_byte(cfg.zen_toggle_key.as_deref()),
             Some(0x07)
         );
         assert_eq!(cfg.status_bar.left.len(), 3);
-        assert_eq!(cfg.status_bar.left[0].style.bg_ansi, Some(24));
+        assert_eq!(
+            cfg.status_bar.left[0].style.bg,
+            Some(Color::Rgb(137, 220, 235))
+        );
+        assert_eq!(cfg.status_bar.left[0].style.icon.as_deref(), Some("📁"));
+        assert_eq!(cfg.status_bar.left[1].style.pill, Some(true));
         assert_eq!(cfg.overlays[0].border, BorderStyle::Rounded);
-        assert_eq!(cfg.overlays[0].title.as_deref(), Some(" CLOCK "));
+        assert_eq!(cfg.overlays[0].title.as_deref(), Some(" HUD "));
+        assert_eq!(cfg.overlays[0].padding_x, 1);
+        assert_eq!(cfg.overlays[0].widgets.len(), 2);
 
-        // Also verify dynamic `to_annotated_toml()` round-trips customized Config!
+        // Verify dynamic `to_annotated_toml()` round-trips customized Config!
         let regenerated = cfg.to_annotated_toml();
         let reparsed = Config::from_toml(&regenerated).expect("regenerated TOML must be valid");
         assert_eq!(reparsed, cfg);

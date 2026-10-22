@@ -1,6 +1,6 @@
 use crate::compositor::BuiltinValues;
 use crate::config::{Config, IpcMessage, OverlayConfig, ToastLevel, WidgetKind, WidgetSpec};
-use crate::ui::{CellStyle, Color, Gauge, Line, Span, Sparkline};
+use crate::ui::{CellStyle, Color, Gauge, Line, Span, Sparkline, ThemePalette, ThemePreset};
 use chrono::{DateTime, Local};
 use std::collections::{BTreeMap, VecDeque};
 use std::time::{Duration, Instant};
@@ -161,10 +161,14 @@ impl TelemetryStore {
             specs.push(&w.kind);
         }
         for ov in &config.overlays {
-            specs.push(&ov.widget.kind);
+            for w in &ov.widgets {
+                specs.push(&w.kind);
+            }
         }
         for ov in self.dynamic_overlays.values() {
-            specs.push(&ov.config.widget.kind);
+            for w in &ov.config.widgets {
+                specs.push(&w.kind);
+            }
         }
 
         let mut due = Vec::new();
@@ -189,24 +193,61 @@ impl TelemetryStore {
         due
     }
 
+    /// Resolves the `(fg, bg)` accent colors for a widget from `theme` when the user has not
+    /// explicitly set `spec.style.fg` or `spec.style.bg`.
+    fn resolve_widget_style(
+        spec: &WidgetSpec,
+        fallback_style: CellStyle,
+        theme: ThemePreset,
+        in_status_bar: bool,
+    ) -> CellStyle {
+        let palette: ThemePalette = theme.palette();
+        let (default_fg, default_bg) = if in_status_bar && theme != ThemePreset::Default {
+            match &spec.kind {
+                WidgetKind::Cwd => palette.cwd_accent,
+                WidgetKind::GitBranch => palette.git_accent,
+                WidgetKind::ActiveCommand { .. } => palette.cmd_accent,
+                WidgetKind::Sparkline { .. } | WidgetKind::Gauge { .. } => palette.metric_accent,
+                WidgetKind::Battery => palette.battery_accent,
+                _ => (fallback_style.fg, fallback_style.bg),
+            }
+        } else {
+            (fallback_style.fg, fallback_style.bg)
+        };
+
+        CellStyle {
+            fg: spec.style.fg.unwrap_or(default_fg),
+            bg: spec.style.bg.unwrap_or(default_bg),
+            bold: spec.style.bold.unwrap_or(fallback_style.bold),
+            italic: fallback_style.italic,
+            underline: fallback_style.underline,
+            inverse: fallback_style.inverse,
+        }
+    }
+
     /// Evaluates a single `WidgetSpec` into one or more styled `Line`s using `src/ui/` components.
     pub fn evaluate_widget_lines(
         &self,
         spec: &WidgetSpec,
         fallback_style: CellStyle,
+        theme: ThemePreset,
+        in_status_bar: bool,
         now: Instant,
     ) -> Vec<Line> {
-        let seg_style = CellStyle {
-            fg: spec.style.fg_ansi.map_or(fallback_style.fg, Color::Ansi),
-            bg: spec.style.bg_ansi.map_or(fallback_style.bg, Color::Ansi),
-            bold: spec.style.bold.unwrap_or(fallback_style.bold),
-            italic: fallback_style.italic,
-            underline: fallback_style.underline,
-            inverse: fallback_style.inverse,
-        };
-
+        let seg_style = Self::resolve_widget_style(spec, fallback_style, theme, in_status_bar);
+        let outer_bg = fallback_style.bg;
+        let icon = spec.style.icon.as_deref();
+        let padding = spec.style.padding.unwrap_or(false);
+        let pill = spec.style.pill.unwrap_or(false);
         let prefix = spec.style.prefix.as_deref();
         let suffix = spec.style.suffix.as_deref();
+        let track_fg = spec.style.track_fg.or_else(|| {
+            if theme != ThemePreset::Default {
+                Some(theme.palette().track_fg)
+            } else {
+                None
+            }
+        });
 
         match &spec.kind {
             WidgetKind::Sparkline { key, width } => {
@@ -215,7 +256,7 @@ impl TelemetryStore {
                 };
                 let line = Sparkline::new(&series.history, *width, seg_style)
                     .to_line()
-                    .with_affixes(prefix, suffix, seg_style);
+                    .decorate_segment(icon, padding, pill, prefix, suffix, seg_style, outer_bg);
                 if line.is_empty() {
                     Vec::new()
                 } else {
@@ -228,8 +269,9 @@ impl TelemetryStore {
                 };
                 let effective_label = series.label.as_deref().or(label.as_deref());
                 let line = Gauge::new(series.latest, *width, effective_label, seg_style)
+                    .with_track_fg(track_fg)
                     .to_line()
-                    .with_affixes(prefix, suffix, seg_style);
+                    .decorate_segment(icon, padding, pill, prefix, suffix, seg_style, outer_bg);
                 if line.is_empty() {
                     Vec::new()
                 } else {
@@ -244,11 +286,17 @@ impl TelemetryStore {
                 if secs < *min_secs {
                     return Vec::new();
                 }
-                let line = Line::new(vec![
-                    Span::styled("⚙ ", seg_style.with_bold(true)),
-                    Span::styled(format!("{name} ({secs}s)"), seg_style),
-                ])
-                .with_affixes(prefix, suffix, seg_style);
+                let effective_icon = icon.or(Some("⚙"));
+                let line = Line::new(vec![Span::styled(format!("{name} ({secs}s)"), seg_style)])
+                    .decorate_segment(
+                        effective_icon,
+                        padding,
+                        pill,
+                        prefix,
+                        suffix,
+                        seg_style,
+                        outer_bg,
+                    );
                 vec![line]
             }
             other => {
@@ -276,7 +324,11 @@ impl TelemetryStore {
                 }
 
                 raw.lines()
-                    .map(|l| Line::styled(l, seg_style).with_affixes(prefix, suffix, seg_style))
+                    .map(|l| {
+                        Line::styled(l, seg_style).decorate_segment(
+                            icon, padding, pill, prefix, suffix, seg_style, outer_bg,
+                        )
+                    })
                     .collect()
             }
         }
@@ -288,12 +340,13 @@ impl TelemetryStore {
         specs: &[WidgetSpec],
         sep: &str,
         bar_style: CellStyle,
+        theme: ThemePreset,
         now: Instant,
     ) -> Line {
         let mut out = Line::default();
         for spec in specs {
             let Some(first_line) = self
-                .evaluate_widget_lines(spec, bar_style, now)
+                .evaluate_widget_lines(spec, bar_style, theme, true, now)
                 .into_iter()
                 .next()
             else {
@@ -317,8 +370,12 @@ impl TelemetryStore {
             .iter()
             .chain(config.status_bar.center.iter())
             .chain(config.status_bar.right.iter())
-            .chain(config.overlays.iter().map(|ov| &ov.widget))
-            .chain(self.dynamic_overlays.values().map(|ov| &ov.config.widget));
+            .chain(config.overlays.iter().flat_map(|ov| ov.widgets.iter()))
+            .chain(
+                self.dynamic_overlays
+                    .values()
+                    .flat_map(|ov| ov.config.widgets.iter()),
+            );
 
         for w in all_widgets {
             match &w.kind {
@@ -357,3 +414,6 @@ impl TelemetryStore {
             .retain(|_, entry| entry.expires_at.is_none_or(|exp| exp > now));
     }
 }
+
+/// Suppress unused import warning when `Color` is used through `CellStyle`
+const _: Option<Color> = None;

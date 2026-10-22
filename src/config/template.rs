@@ -8,7 +8,7 @@ impl Config {
     }
 
     /// Formats `self` into a self-documenting, human-friendly TOML configuration string
-    /// with comments explaining every section, widget kind, and option.
+    /// with comments explaining every section, theme, color format, widget kind, and option.
     pub fn to_annotated_toml(&self) -> String {
         let mut out = String::with_capacity(4096);
 
@@ -17,7 +17,15 @@ impl Config {
              # thud - Terminal Heads Up Display Configuration\n\
              # Default path: ~/.config/thud/config.toml (or override via $THUD_CONFIG / --config)\n\
              # =============================================================================\n\n\
-             # Optional: Shell executable to spawn inside the PTY.\n\
+             # Color Theme Preset:\n\
+             #   \"default\" | \"tokyo_night\" | \"catppuccin\" | \"cyberpunk\" | \"nord\" | \"gruvbox\"\n\
+             # Setting a theme automatically styles the status bar, overlay borders/titles,\n\
+             # and per-widget accent colors unless overridden by explicit `fg` / `bg` fields.\n",
+        );
+        let _ = writeln!(out, "theme = {}", format_inline_value(&self.theme));
+
+        out.push_str(
+            "\n# Optional: Shell executable to spawn inside the PTY.\n\
              # Defaults to $SHELL (or \"/bin/sh\" if $SHELL is unset).\n",
         );
         match &self.shell {
@@ -70,6 +78,13 @@ impl Config {
              # Docked Bottom Status Bar (Vim-like status line)\n\
              # Reserves `height` row(s) at the bottom of the terminal so child applications\n\
              # (including fullscreen TUI apps like vim, htop, fzf, less) never overwrite it.\n\
+             #\n\
+             # Colors (`fg`, `bg`, `border_fg`, `title_fg`, `track_fg`) accept:\n\
+             #   - Semantic names: \"cyan\", \"blue\", \"green\", \"magenta\", \"yellow\", \"red\",\n\
+             #                     \"white\", \"black\", \"gray\", \"dark_gray\", \"orange\", \"purple\",\n\
+             #                     \"pink\", \"teal\", \"lavender\", \"peach\", \"sky\", \"mauve\", \"emerald\"\n\
+             #   - Hex TrueColor:  \"#89b4fa\", \"#1e1e2e\"\n\
+             #   - ANSI 256 index: 0..255 (e.g. 231 = bright white, 236 = dark charcoal)\n\
              # -----------------------------------------------------------------------------\n\
              [status_bar]\n",
         );
@@ -80,14 +95,23 @@ impl Config {
             "separator = {}",
             toml_quote(&self.status_bar.separator)
         );
-        out.push_str("# Default 256-color ANSI palette index (0-255): 255 = bright white, 236 = dark charcoal\n");
-        let _ = writeln!(out, "fg_ansi = {}", self.status_bar.fg_ansi);
-        let _ = writeln!(out, "bg_ansi = {}", self.status_bar.bg_ansi);
+        match self.status_bar.fg {
+            Some(c) => {
+                let _ = writeln!(out, "fg = {}", format_inline_value(&c));
+            }
+            None => out.push_str("# fg = \"#c0caf5\"\n"),
+        }
+        match self.status_bar.bg {
+            Some(c) => {
+                let _ = writeln!(out, "bg = {}", format_inline_value(&c));
+            }
+            None => out.push_str("# bg = \"#1a1b26\"\n"),
+        }
 
         out.push_str(
             "\n# Widgets placed on the left, center, and right of the status bar.\n\
-             # Every widget supports optional per-segment styling & capsule affixes:\n\
-             #   fg_ansi = 231, bg_ansi = 24, bold = true, prefix = \" \", suffix = \" \"\n\
+             # Every widget supports optional per-segment styling & component decorations:\n\
+             #   fg = \"black\", bg = \"cyan\", bold = true, icon = \"📁\", padding = true, pill = true\n\
              #\n\
              # Available widget types (`type = ...`):\n\
              #   1. { type = \"cwd\" }\n\
@@ -108,7 +132,7 @@ impl Config {
              #      -> Dynamic slot updated via `thud set status \"BUILDING...\" --ttl-ms 5000`\n\
              #   9. { type = \"sparkline\", key = \"cpu\", width = 8 }\n\
              #      -> Historical mini-graph (`▁▂▃▄▅▆▇█`) fed via `thud progress cpu 65`\n\
-             #  10. { type = \"gauge\", key = \"build\", width = 10, label = \"Build\" }\n\
+             #  10. { type = \"gauge\", key = \"build\", width = 10, label = \"Build\", track_fg = \"dark_gray\" }\n\
              #      -> Progress bar (`━━━─── 60%`) fed via `thud progress build 60 --label \"Compiling\"`\n",
         );
 
@@ -121,7 +145,7 @@ impl Config {
         // [[overlays]] section
         out.push_str(
             "\n# -----------------------------------------------------------------------------\n\
-             # Floating Overlays (Non-destructive HUD layers composited over the terminal)\n\
+             # Floating Overlays (Non-destructive multi-widget HUD panels)\n\
              # Overlays do not shrink the child PTY or mutate its screen buffer; when moved\n\
              # or hidden, the underlying terminal characters (including wide CJK chars) are\n\
              # restored automatically.\n\
@@ -205,13 +229,38 @@ fn write_overlay(out: &mut String, ov: &OverlayConfig) {
         }
     }
 
-    out.push_str("\n# 256-color ANSI palette index (0-255) and text weight\n");
-    let _ = writeln!(out, "fg_ansi = {}", ov.fg_ansi);
-    let _ = writeln!(out, "bg_ansi = {}", ov.bg_ansi);
+    match ov.fg {
+        Some(c) => {
+            let _ = writeln!(out, "fg = {}", format_inline_value(&c));
+        }
+        None => out.push_str("# fg = \"white\"\n"),
+    }
+    match ov.bg {
+        Some(c) => {
+            let _ = writeln!(out, "bg = {}", format_inline_value(&c));
+        }
+        None => out.push_str("# bg = \"dark_gray\"\n"),
+    }
+    match ov.border_fg {
+        Some(c) => {
+            let _ = writeln!(out, "border_fg = {}", format_inline_value(&c));
+        }
+        None => out.push_str("# border_fg = \"cyan\"\n"),
+    }
+    match ov.title_fg {
+        Some(c) => {
+            let _ = writeln!(out, "title_fg = {}", format_inline_value(&c));
+        }
+        None => out.push_str("# title_fg = \"yellow\"\n"),
+    }
+    let _ = writeln!(out, "padding_x = {}", ov.padding_x);
     let _ = writeln!(out, "bold = {}", ov.bold);
     if let Some(ttl) = ov.ttl_ms {
         let _ = writeln!(out, "ttl_ms = {ttl}");
     }
+
+    out.push_str("\n# Widgets stacked vertically inside this overlay panel:\n");
+    write_widget_array(out, "widgets", &ov.widgets);
 
     out.push_str(
         "\n# Behavior when the child cursor or terminal text reaches the overlay region:\n\
@@ -221,13 +270,6 @@ fn write_overlay(out: &mut String, ov: &OverlayConfig) {
          [overlays.collision]\n",
     );
     if let Ok(toml::Value::Table(map)) = toml::Value::try_from(ov.collision) {
-        for (k, v) in map {
-            let _ = writeln!(out, "{k} = {v}");
-        }
-    }
-
-    out.push_str("\n[overlays.widget]\n");
-    if let Ok(toml::Value::Table(map)) = toml::Value::try_from(&ov.widget) {
         for (k, v) in map {
             let _ = writeln!(out, "{k} = {v}");
         }

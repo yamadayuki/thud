@@ -6,7 +6,7 @@ pub mod widgets;
 
 pub use buffer::{Buffer, Cell, CursorState};
 pub use rect::Rect;
-pub use style::{Anchor, BorderStyle, CellStyle, Color, TermSize};
+pub use style::{Anchor, BorderStyle, CellStyle, Color, TermSize, ThemePalette, ThemePreset};
 pub use text::{Line, Span, display_width};
 pub use widgets::{Block, Gauge, Sparkline, StatusBar, Toast, Widget};
 
@@ -42,5 +42,12 @@ mod tests {
                 .unwrap()
                 .starts_with("B ━━── 50%")
         );
+    }
+
+    #[test]
+    fn color_parses_named_colors_hex_rgb_and_ansi_numbers() {
+        assert_eq!(Color::parse_str("cyan").unwrap(), Color::Rgb(137, 220, 235));
+        assert_eq!(Color::parse_str("#1e1e2e").unwrap(), Color::Rgb(30, 30, 46));
+        assert_eq!(Color::parse_str("231").unwrap(), Color::Ansi(231));
     }
 }

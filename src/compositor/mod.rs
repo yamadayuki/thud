@@ -6,7 +6,7 @@ use crate::compositor::layout::PlacementSolver;
 use crate::compositor::store::TelemetryStore;
 use crate::compositor::vt::VtScreenAdapter;
 use crate::config::{Config, ConfigError, IpcMessage, OverlayConfig, ScreenCondition, TermSize};
-use crate::ui::{Block, Buffer, CellStyle, Gauge, Rect, StatusBar, Toast, Widget};
+use crate::ui::{Block, Buffer, CellStyle, Gauge, Line, Rect, StatusBar, Toast, Widget};
 use chrono::{DateTime, Local};
 use std::time::Instant;
 
@@ -205,6 +205,7 @@ impl Compositor {
     fn build_buffer(&self, now: Instant) -> Buffer {
         let mut buf = Buffer::new(self.host_size.cols, self.host_size.rows);
         let child_size = self.child_size();
+        let palette = self.config.theme.palette();
 
         // 1. Project child virtual terminal screen cells & cursor into `buf`
         self.vt.paint_into_buffer(child_size, &mut buf);
@@ -217,30 +218,34 @@ impl Compositor {
         let reserved = self.config.reserved_bottom_rows();
         if self.config.status_bar.enabled && self.host_size.rows > reserved && reserved > 0 {
             let status_row = self.host_size.rows - reserved;
-            let bar_style = CellStyle::ansi(
-                self.config.status_bar.fg_ansi,
-                self.config.status_bar.bg_ansi,
+            let bar_style = CellStyle::new(
+                self.config.status_bar.fg.unwrap_or(palette.bar_fg),
+                self.config.status_bar.bg.unwrap_or(palette.bar_bg),
                 false,
             );
             let sep = &self.config.status_bar.separator;
+            let theme = self.config.theme;
             let bar = StatusBar {
                 base_style: bar_style,
                 left: self.store.build_segment_line(
                     &self.config.status_bar.left,
                     sep,
                     bar_style,
+                    theme,
                     now,
                 ),
                 center: self.store.build_segment_line(
                     &self.config.status_bar.center,
                     sep,
                     bar_style,
+                    theme,
                     now,
                 ),
                 right: self.store.build_segment_line(
                     &self.config.status_bar.right,
                     sep,
                     bar_style,
+                    theme,
                     now,
                 ),
             };
@@ -284,15 +289,29 @@ impl Compositor {
             _ => {}
         }
 
-        let base_style = CellStyle::ansi(ov.fg_ansi, ov.bg_ansi, ov.bold);
-        let lines = self
-            .store
-            .evaluate_widget_lines(&ov.widget, base_style, now);
+        let palette = self.config.theme.palette();
+        let base_style = CellStyle::new(
+            ov.fg.unwrap_or(palette.overlay_fg),
+            ov.bg.unwrap_or(palette.overlay_bg),
+            ov.bold,
+        );
+
+        let mut lines: Vec<Line> = Vec::new();
+        for w in &ov.widgets {
+            let evaluated =
+                self.store
+                    .evaluate_widget_lines(w, base_style, self.config.theme, false, now);
+            lines.extend(evaluated);
+        }
         if lines.is_empty() {
             return;
         }
 
-        let block = Block::new(ov.border, ov.title.as_deref(), base_style, lines);
+        let border_fg = ov.border_fg.or(Some(palette.border_fg));
+        let title_fg = ov.title_fg.or(Some(palette.title_fg));
+        let block = Block::new(ov.border, ov.title.as_deref(), base_style, lines)
+            .with_border_and_title_fg(border_fg, title_fg)
+            .with_padding_x(ov.padding_x);
         let (box_width, box_height) = block.measure();
 
         let Some(rect) = PlacementSolver::resolve_overlay_rect(
@@ -386,7 +405,7 @@ mod tests {
             id = "clock"
             anchor = "top_right"
             collision = { mode = "dodge_to_opposite_corner", margin = 1 }
-            widget = { type = "clock", format = "%H:%M" }
+            widgets = [{ type = "clock", format = "%H:%M" }]
         "#,
         )
         .unwrap()
@@ -574,10 +593,12 @@ mod tests {
     }
 
     #[test]
-    fn renders_bordered_overlay_sparkline_gauge_and_toast_stack() {
+    fn renders_bordered_multi_widget_overlay_sparkline_gauge_and_toast_stack() {
         let now = Instant::now();
         let cfg = Config::from_toml(
             r#"
+            theme = "tokyo_night"
+
             [status_bar]
             enabled = true
             height = 1
@@ -594,12 +615,15 @@ mod tests {
             border = "rounded"
             title = "SYS"
             collision = { mode = "ignore" }
-            widget = { type = "text", text = "OK" }
+            widgets = [
+                { type = "text", text = "OK" },
+                { type = "text", text = "UP" }
+            ]
         "#,
         )
         .unwrap();
 
-        let (mut comp, _) = Compositor::new(TermSize { cols: 24, rows: 6 }, cfg, now).unwrap();
+        let (mut comp, _) = Compositor::new(TermSize { cols: 24, rows: 7 }, cfg, now).unwrap();
 
         comp.step(
             Event::Ipc(IpcMessage::PushMetric {
@@ -647,15 +671,16 @@ mod tests {
 
         let rendered = comp.rendered_text();
         let lines: Vec<&str> = rendered.lines().collect();
-        // Top-right 3-line rounded border box: ╭SYS╮ / │OK │ / ╰───╯
+        // Top-right 4-line multi-widget rounded border box: ╭SYS╮ / │OK │ / │UP │ / ╰───╯
         assert_eq!(lines[0], "                   ╭SYS╮");
         assert_eq!(lines[1], "                   │OK │");
-        assert_eq!(lines[2], "                   ╰───╯");
-        // Stacked toasts at bottom-right of child area (rows 3 and 4)
-        assert!(lines[3].ends_with(" ℹ T1 "));
-        assert!(lines[4].ends_with(" ✓ T2 "));
+        assert_eq!(lines[2], "                   │UP │");
+        assert_eq!(lines[3], "                   ╰───╯");
+        // Stacked toasts at bottom-right of child area (rows 4 and 5)
+        assert!(lines[4].ends_with(" ℹ T1 "));
+        assert!(lines[5].ends_with(" ✓ T2 "));
         // Bottom status bar with sparkline & gauge
-        assert!(lines[5].contains("▁▁▁█ B ━━── 50%"));
+        assert!(lines[6].contains("▁▁▁█ B ━━── 50%"));
     }
 
     #[test]
@@ -676,7 +701,7 @@ mod tests {
             anchor = "top_left"
             screen_mode = "dashboard_only"
             collision = { mode = "ignore" }
-            widget = { type = "text", text = "DASHBOARD" }
+            widgets = [{ type = "text", text = "DASHBOARD" }]
         "#,
         )
         .unwrap();

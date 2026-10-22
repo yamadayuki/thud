@@ -1,4 +1,4 @@
-use crate::ui::style::CellStyle;
+use crate::ui::style::{CellStyle, Color};
 use unicode_width::UnicodeWidthChar;
 
 /// A contiguous inline run of characters sharing a single `CellStyle`.
@@ -86,14 +86,44 @@ impl Line {
         self
     }
 
-    /// Re-styles any span that currently uses `from_style` to `to_style`, or applies segment overrides.
-    pub fn apply_base_style(&mut self, style: CellStyle) {
-        for span in &mut self.spans {
-            span.style.bg = style.bg;
-            if span.style.fg == crate::ui::style::Color::Default {
-                span.style.fg = style.fg;
-            }
+    /// Decorates a segment line with an optional leading bold `icon`, inner `padding` (`" "`),
+    /// explicit `prefix` / `suffix`, and outer Nerd Font rounded `pill` caps (`` / ``).
+    #[allow(clippy::too_many_arguments)]
+    pub fn decorate_segment(
+        mut self,
+        icon: Option<&str>,
+        padding: bool,
+        pill: bool,
+        prefix: Option<&str>,
+        suffix: Option<&str>,
+        seg_style: CellStyle,
+        outer_bg: Color,
+    ) -> Self {
+        if self.is_empty() {
+            return self;
         }
+
+        if let Some(ic) = icon
+            && !ic.is_empty()
+        {
+            self.spans
+                .insert(0, Span::styled(format!("{ic} "), seg_style.with_bold(true)));
+        }
+
+        self = self.with_affixes(prefix, suffix, seg_style);
+
+        if padding {
+            self.spans.insert(0, Span::styled(" ", seg_style));
+            self.spans.push(Span::styled(" ", seg_style));
+        }
+
+        if pill {
+            let cap_style = CellStyle::new(seg_style.bg, outer_bg, false);
+            self.spans.insert(0, Span::styled("\u{e0b6}", cap_style));
+            self.spans.push(Span::styled("\u{e0b4}", cap_style));
+        }
+
+        self
     }
 }
 

@@ -20,8 +20,8 @@ impl Widget for &Line {
     }
 }
 
-/// A bordered container widget (`Single`, `Rounded`, `Double`, or `None`) with an optional styled title
-/// and inner content lines.
+/// A bordered container widget (`Single`, `Rounded`, `Double`, or `None`) with an optional styled title,
+/// horizontal inner padding (`padding_x`), and multi-widget inner content lines.
 #[derive(Debug, Clone)]
 pub struct Block<'a> {
     pub border: BorderStyle,
@@ -29,6 +29,7 @@ pub struct Block<'a> {
     pub base_style: CellStyle,
     pub border_style: CellStyle,
     pub title_style: CellStyle,
+    pub padding_x: u16,
     pub lines: Vec<Line>,
 }
 
@@ -47,16 +48,44 @@ impl<'a> Block<'a> {
             base_style,
             border_style,
             title_style,
+            padding_x: 0,
             lines,
         }
     }
 
-    /// Computes the `(width, height)` required to fit this block and its inner lines.
+    pub fn with_border_and_title_fg(
+        mut self,
+        border_fg: Option<Color>,
+        title_fg: Option<Color>,
+    ) -> Self {
+        if let Some(bfg) = border_fg {
+            self.border_style.fg = bfg;
+        }
+        if let Some(tfg) = title_fg {
+            self.title_style.fg = tfg;
+        }
+        self
+    }
+
+    pub fn with_padding_x(mut self, padding_x: u16) -> Self {
+        self.padding_x = padding_x;
+        self
+    }
+
+    /// Computes the `(width, height)` required to fit this block, its horizontal padding, and its inner lines.
     pub fn measure(&self) -> (u16, u16) {
         if self.lines.is_empty() {
             return (0, 0);
         }
-        let max_content_width = self.lines.iter().map(Line::width).max().unwrap_or(0);
+        let pad_both = self.padding_x.saturating_mul(2);
+        let max_content_width = self
+            .lines
+            .iter()
+            .map(Line::width)
+            .max()
+            .unwrap_or(0)
+            .saturating_add(pad_both);
+
         if self.border == BorderStyle::None {
             return (max_content_width, self.lines.len() as u16);
         }
@@ -73,12 +102,21 @@ impl Widget for Block<'_> {
         }
 
         let Some((tl, tr, bl, br, hz, vt)) = self.border.chars() else {
+            if self.padding_x > 0 {
+                buf.fill_rect(area, self.base_style);
+            }
             for (idx, line) in self.lines.iter().enumerate() {
                 let row = area.y + idx as u16;
                 if row >= area.bottom() {
                     break;
                 }
-                buf.set_line(row, area.x, area.right(), line);
+                let start_col = (area.x + self.padding_x).min(area.right());
+                buf.set_line(
+                    row,
+                    start_col,
+                    area.right().saturating_sub(self.padding_x),
+                    line,
+                );
             }
             return;
         };
@@ -111,15 +149,17 @@ impl Widget for Block<'_> {
         }
         buf.set_char(top_row, right_col, tr, 1, self.border_style);
 
-        // Content rows with vertical borders
+        // Content rows with vertical borders and horizontal padding
         let inner_area = area.inner(1, 1);
+        let content_start_col = (inner_area.x + self.padding_x).min(inner_area.right());
+        let content_max_col = inner_area.right().saturating_sub(self.padding_x);
         for (idx, line) in self.lines.iter().enumerate() {
             let r = inner_area.y + idx as u16;
             if r >= bot_row {
                 break;
             }
             buf.set_char(r, left_col, vt, 1, self.border_style);
-            buf.set_line(r, inner_area.x, inner_area.right(), line);
+            buf.set_line(r, content_start_col, content_max_col, line);
             buf.set_char(r, right_col, vt, 1, self.border_style);
         }
 
@@ -139,6 +179,7 @@ pub struct Gauge<'a> {
     pub width: usize,
     pub label: Option<&'a str>,
     pub base_style: CellStyle,
+    pub track_fg: Option<Color>,
 }
 
 impl<'a> Gauge<'a> {
@@ -148,7 +189,13 @@ impl<'a> Gauge<'a> {
             width,
             label,
             base_style,
+            track_fg: None,
         }
+    }
+
+    pub fn with_track_fg(mut self, track_fg: Option<Color>) -> Self {
+        self.track_fg = track_fg;
+        self
     }
 
     /// Builds a rich multi-span `Line` where the label, filled bar (`━`), dimmed track (`─`),
@@ -163,12 +210,11 @@ impl<'a> Gauge<'a> {
 
         let label_style = self.base_style.with_bold(true);
         let filled_style = self.base_style.with_bold(true);
-        // Subtle dimmed track style sharing the same background
-        let track_fg = match self.base_style.bg {
+        let resolved_track_fg = self.track_fg.unwrap_or(match self.base_style.bg {
             Color::Ansi(bg) if (232..=245).contains(&bg) => Color::Ansi(242),
             _ => self.base_style.fg,
-        };
-        let track_style = self.base_style.with_fg(track_fg).with_bold(false);
+        });
+        let track_style = self.base_style.with_fg(resolved_track_fg).with_bold(false);
 
         let mut spans = Vec::with_capacity(4);
         if let Some(lbl) = self.label

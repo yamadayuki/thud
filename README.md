@@ -155,84 +155,39 @@ thud quit
 
 ## Showcase Configuration (`~/.config/thud/config.toml`)
 
-Below is a full-featured cyber/cockpit HUD configuration featuring Powerline-style colored status capsules, automatic slow-command timer, live CPU sparkline, build progress gauge, a bordered top-right clock, and an on-demand `Ctrl+]` system dashboard:
+Below is a full-featured HUD configuration powered by the `src/ui/` component foundation — featuring `theme = "tokyo_night"`, automatic accent capsules (`icon`, `padding`, `pill`), automatic slow-command timer, live CPU sparkline, build progress gauge, a bordered top-right clock, and a multi-widget `Ctrl+]` system dashboard:
 
 ```toml
-tick_interval_ms = 500
+# Built-in themes: "default" | "tokyo_night" | "catppuccin" | "cyberpunk" | "nord" | "gruvbox"
+theme = "tokyo_night"
+
+zen_toggle_key = "ctrl-\\"
+dashboard_toggle_key = "ctrl-]"
 
 [status_bar]
 enabled = true
 height = 1
-fg_ansi = 252
-bg_ansi = 235
 separator = " "
-show_on = "always"
 
 # Left: CWD capsule + Git branch capsule + slow-command timer (>= 2s)
-[[status_bar.left_widgets]]
-kind = "cwd"
-prefix = " 📁 "
-suffix = " "
-fg_ansi = 232
-bg_ansi = 39
-bold = true
-
-[[status_bar.left_widgets]]
-kind = "git_branch"
-prefix = " 🌿 "
-suffix = " "
-fg_ansi = 232
-bg_ansi = 114
-bold = true
-
-[[status_bar.left_widgets]]
-kind = "active_command"
-min_duration_ms = 2000
-prefix = " ⏱ "
-suffix = " "
-fg_ansi = 232
-bg_ansi = 214
-bold = true
+# Theme automatically assigns accent colors per widget type, or override with `fg` / `bg`!
+left = [
+    { type = "cwd", icon = "📁", padding = true, bold = true },
+    { type = "git_branch", icon = "🌿", padding = true, bold = true },
+    { type = "active_command", min_secs = 2, padding = true, bold = true },
+]
 
 # Center: Live IPC slot + build progress gauge
-[[status_bar.center_widgets]]
-kind = "ipc_slot"
-key = "agent"
-prefix = " 🤖 "
-suffix = " "
-fg_ansi = 255
-bg_ansi = 57
-bold = true
-
-[[status_bar.center_widgets]]
-kind = "gauge"
-key = "build"
-width = 10
-prefix = " 🚀 "
-suffix = " "
-fg_ansi = 232
-bg_ansi = 45
-bold = true
+center = [
+    { type = "ipc_slot", key = "agent", icon = "🤖", fg = "white", bg = "purple", padding = true, bold = true },
+    { type = "gauge", key = "build", width = 10, label = "Build", icon = "🚀", padding = true },
+]
 
 # Right: CPU load sparkline + Battery capsule
-[[status_bar.right_widgets]]
-kind = "sparkline"
-key = "cpu"
-command = "ps -A -o %cpu | awk '{s+=$1} END {printf \"%.0f\", s/8}'"
-interval_ms = 2000
-width = 8
-prefix = " CPU "
-suffix = " "
-fg_ansi = 159
-bg_ansi = 238
-
-[[status_bar.right_widgets]]
-kind = "battery"
-prefix = " 🔋 "
-suffix = " "
-fg_ansi = 232
-bg_ansi = 221
-bold = true
+right = [
+    { type = "sparkline", key = "cpu", width = 8, icon = "CPU", padding = true },
+    { type = "battery", icon = "🔋", padding = true, bold = true },
+]
 
 # Floating Top-Right Rounded Clock (dodges cursor & terminal text)
 [[overlays]]
@@ -240,36 +195,35 @@ id = "top_right_clock"
 anchor = "top_right"
 offset_x = 1
 offset_y = 0
-fg_ansi = 159
-bg_ansi = 236
-bold = true
 border = "rounded"
-title = "TIME"
-on_cursor_collision = "dodge_to_opposite_corner"
-show_on = "primary_only"
+title = " TIME "
+border_fg = "cyan"
+title_fg = "yellow"
+padding_x = 1
+screen_mode = "primary_only"
+collision = { mode = "dodge_to_opposite_corner", margin = 1, avoid_text = true }
+widgets = [
+    { type = "clock", format = "%H:%M:%S" },
+]
 
-[[overlays.widgets]]
-kind = "clock"
-
-# On-Demand System Dashboard (Toggle with Ctrl+])
+# On-Demand Multi-Widget System Dashboard (Toggle with Ctrl+])
 [[overlays]]
 id = "sys_dashboard"
 anchor = "bottom_right"
 offset_x = 2
 offset_y = 1
-fg_ansi = 255
-bg_ansi = 235
-bold = true
 border = "double"
-title = "SYSTEM HUD (Ctrl+])"
-toggle_only = true
-on_cursor_collision = "dodge_to_opposite_corner"
-show_on = "always"
-
-[[overlays.widgets]]
-kind = "command"
-command = "uptime | sed 's/.*load averages: /Load: /'"
-interval_ms = 3000
+title = " SYSTEM HUD (Ctrl+]) "
+border_fg = "magenta"
+title_fg = "cyan"
+padding_x = 1
+screen_mode = "dashboard_only"
+collision = { mode = "dodge_to_opposite_corner", margin = 1, avoid_text = true }
+widgets = [
+    { type = "command", id = "load", cmd = "uptime | sed 's/.*load averages: /Load: /'", interval_ms = 3000 },
+    { type = "sparkline", key = "cpu", width = 12, icon = "CPU" },
+    { type = "gauge", key = "build", width = 12, label = "Task" },
+]
 ```
 
 ---

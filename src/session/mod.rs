@@ -281,7 +281,7 @@ mod tests {
             id = "clock"
             anchor = "top_right"
             collision = { mode = "dodge_to_opposite_corner", margin = 1 }
-            widget = { type = "clock", format = "%H:%M" }
+            widgets = [{ type = "clock", format = "%H:%M" }]
         "#,
         )
         .unwrap();
