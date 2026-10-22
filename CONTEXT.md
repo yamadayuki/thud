@@ -33,12 +33,24 @@ The pure Sans-I/O state machine that merges virtual terminal screen state, `Tele
 _Avoid_: Renderer, Engine, ScreenManager
 
 **TelemetryStore**:
-The in-memory state store inside `Compositor` that holds TTL-expiring IPC slots, metric ring buffers, toast notification queues, periodic command outputs, and foreground command timers.
+The in-memory state store inside `Compositor` that holds TTL-expiring IPC slots, metric ring buffers, toast notification queues, IPC-injected dynamic overlays, builtin values, and the foreground command timer.
 _Avoid_: StateCache, WidgetStore
+
+**HudPainter**:
+The internal module inside `Compositor` that paints the HUD (status bar, floating overlays, toast stack) over the projected child screen, evaluating each `Widget` from HUD state and resolving theme colors.
+_Avoid_: Renderer, HudLayer, Scene
+
+**InputRouter**:
+The internal module inside `Compositor` that decides what each piece of host input means: bytes for the child, scrollback movement, a HUD hotkey, or an opaque bracketed paste, holding incomplete mouse reports until they complete.
+_Avoid_: KeyHandler, InputParser, HostInputDecoder
 
 **VtScreenAdapter**:
 The internal adapter that wraps the dual-screen (`Primary` / `Alternate`) VT100 parser, copies virtual screen cells into a `Buffer`, and synthesizes responses to terminal capability queries (`DA1`, `DA2`, `DSR`, `XTVERSION`, `OSC`).
 _Avoid_: TerminalParser, VtWrapper
+
+**CommandScheduler**:
+The internal module inside `Compositor` that decides when each widget or metric shell command is due (interval, CWD change, foreground command finish, `when_files` markers), suppresses overlapping runs, and interprets and keeps command output.
+_Avoid_: CommandPool, JobQueue, Cron
 
 **PlacementSolver**:
 The pure geometric solver that maps an overlay's `Anchor`, offsets, and `CollisionPolicy` (`Ignore`, `AutoHide`, `DodgeToOppositeCorner`) to a collision-free `Rect` on the `Buffer`.
@@ -47,13 +59,25 @@ _Avoid_: LayoutEngine, DodgeCalculator
 ### Session & OS Adapters (`src/session/`)
 
 **Session**:
-The outer runtime module that drives `Compositor` across either OS file descriptors (`Session::run`) or an in-memory test harness (`Session::run_headless`).
+The outer runtime module and public entry point (`Session::run`) that builds the OS adapters and runs a `SessionLoop` until the child shell exits or the session is told to quit.
 _Avoid_: App, Runner, Daemon
+
+**SessionLoop**:
+The crate-internal module that owns every runtime policy of a live session (frame pacing, immediate flush on host input, signal intake, child exit, IPC and quit, periodic command dispatch, telemetry ticks, config reload) and drives `Compositor` one iteration at a time over a `SessionIo`.
+_Avoid_: EventLoop, Driver, MainLoop
+
+**SessionIo**:
+The single crate-internal port through which `SessionLoop` reaches everything outside the process: host terminal, child PTY, IPC socket, signals, periodic commands, telemetry probes, clocks, and config source. Its adapters are `OsSessionIo` (production) and `MemorySessionIo` (tests).
+_Avoid_: Ports, Platform, Backend
+
+**InheritedSession**:
+The snapshot of `THUD_*` variables a new `thud` process inherited from its parent shell, assessed against the current terminal to decide whether the launch is fresh, in another terminal, stale (the previous session died), or nested.
+_Avoid_: SessionEnv, NestingGuard, ParentSession
 
 **SystemProbes**:
 The stateful OS telemetry adapter that samples foreground process CWD, Git branch/dirty status, foreground command name, and cached battery status into `BuiltinValues`.
 _Avoid_: OsMetrics, BuiltinCollector
 
-**HeadlessHarness**:
-The deterministic in-memory adapter at the `Session` seam used by integration tests to drive PTY output, IPC messages, and ticks without spawning an OS terminal.
-_Avoid_: MockSession, TestRunner
+**MemorySessionIo**:
+The deterministic in-memory `SessionIo` adapter with a virtual clock, used by tests to enqueue host input, PTY output, IPC messages, signals, and config changes, advance virtual time, and observe what `SessionLoop` wrote and spawned.
+_Avoid_: HeadlessHarness, MockSession, TestRunner
