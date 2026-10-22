@@ -464,7 +464,7 @@ impl Default for Config {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConfigError {
     Io(String),
     TomlParse(String),
