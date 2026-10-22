@@ -3,7 +3,7 @@ type: Architecture
 title: "Deep Compositor & Session Module Architecture"
 description: Two-tier deep module design pairing a deterministic Sans-I/O Compositor core with a declarative Session runner.
 tags: [architecture, codebase-design, compositor, seam, sans-io]
-generated: { by: agent/cli, at: "2026-10-22T12:27:55Z" }
+generated: { by: claude-code/claude-opus-5-5, at: "2026-10-22T22:26:26Z" }
 status: stable
 ---
 
@@ -16,16 +16,15 @@ flowchart TB
     subgraph ExternalCallers["Callers & Tests"]
         CLI["main.rs / CLI"]
         UnitTest["Deterministic Unit Tests"]
-        IntegTest["HeadlessHarness & PTY E2E Tests"]
+        IntegTest["SessionLoop tests (MemorySessionIo) & PTY E2E Tests"]
     end
 
     subgraph SessionModule["Module: src/session/ (Common-Caller Seam)"]
-        SessionRun["mod.rs: Session::run / run_headless / send_ipc_message"]
-        subgraph InternalSeam["Internal OS & Test Adapters"]
-            TtyPty["tty.rs & pty.rs: OsHostTerminal / OsChildPty"]
-            IpcMod["ipc.rs: OsIpcServer & Client"]
-            ProbesMod["probes.rs: SystemProbes::sample()"]
-            HarnessMod["harness.rs: HeadlessHarness"]
+        SessionRun["mod.rs: Session::run / send_ipc_message"]
+        Loop["session_loop.rs: SessionLoop::run_once (pacing, reload, quit, ticks, commands)"]
+        subgraph InternalSeam["Internal Seam: io.rs SessionIo"]
+            OsIo["io.rs: OsSessionIo (OsHostTerminal, OsChildPty, OsIpcServer, SystemProbes)"]
+            MemIo["memory_io.rs: MemorySessionIo (tests only)"]
         end
     end
 
@@ -43,11 +42,12 @@ flowchart TB
     end
 
     CLI --> SessionRun
-    IntegTest --> SessionRun
+    IntegTest --> Loop
     UnitTest --> Step
     UnitTest --> Surface
-    SessionRun --> InternalSeam
-    SessionRun --> Step
+    SessionRun --> Loop
+    Loop --> InternalSeam
+    Loop --> Step
     Step --> Store
     Step --> VTE
     Step --> Layout
@@ -88,14 +88,16 @@ flowchart TB
 
 - **External Interface**:
   - `Session::run(config: Config) -> Result<i32, SessionError>`
-  - `Session::run_headless(config: Config, cols: u16, rows: u16) -> Result<HeadlessHarness, SessionError>`
   - `Session::send_ipc_message(socket_path: Option<PathBuf>, msg: &IpcMessage) -> Result<(), SessionError>`
-- **Internal Submodules**:
+- **Session Loop (ADR-004)**:
+  - `session_loop.rs` (`SessionLoop<Io: SessionIo>`): owns every runtime policy of a live session — 144 FPS pacing with immediate flush on host input, the dynamic wait timeout, `SIGWINCH` / `SIGTERM`, child exit, IPC and `Quit`, periodic command dispatch, the 250ms telemetry tick, and config reload with an `Error` toast on invalid config — driven one iteration at a time via `run_once()`.
+  - `io.rs` (`SessionIo`): the single crate-internal port for host terminal, child PTY, IPC, signals, commands, probes, clocks, and config source. `OsSessionIo` is the production adapter.
+  - `memory_io.rs` (`MemorySessionIo`, test-only): queued inputs, a virtual clock advanced by `SessionLoop::advance`, and recorded host writes, child input, resizes, and spawned commands.
+- **OS Submodules**:
   - `tty.rs` (`OsHostTerminal`): Direct `STDIN_FILENO` (`0`) raw mode configuration and poll descriptor, atomic `SIGWINCH` and `SIGTERM`/`SIGHUP`/`SIGINT` graceful shutdown signal interception, terminal device name resolution (`get_tty_name`), and alternate screen buffer restoration.
   - `pty.rs` (`OsChildPty`): Manages `forkpty`, `TIOCSWINSZ`, non-blocking PTY I/O, child lifecycle cleanup (`SIGHUP` on drop), and exports child session variables (`THUD_SOCKET`, `THUD_ACTIVE`, `THUD_TTY`).
   - `ipc.rs` (`OsIpcServer`): Non-blocking Unix domain socket listener and client message sender with automatic socket file removal on drop.
   - `probes.rs` (`SystemProbes`): Stateful OS telemetry collector (`sample(master_fd, child_pid, now) -> BuiltinValues`) with CWD-memoized Git branch resolution and asynchronous background thread for battery sampling.
-  - `harness.rs` (`HeadlessHarness`): Deterministic in-memory adapter for multi-step integration tests.
 - **Fail-Safe Session Lifecycle**:
   - Verifies socket liveness and TTY identity before asserting a nested session, automatically purging stale inherited environment variables from dead parent sessions.
   - Supports `--force` (`-f`) override to bypass nested checks explicitly.

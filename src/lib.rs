@@ -9,7 +9,7 @@ pub use config::{
     IpcMessage, OverlayConfig, ScreenCondition, SegmentFormat, StatusBarConfig, TermSize,
     ThemeConfig, ThemePalette, ThemePreset, ToastConfig, ToastLevel, WidgetKind, WidgetSpec,
 };
-pub use session::{HeadlessHarness, Session, SessionError};
+pub use session::{Session, SessionError};
 pub use ui::{
     Block, Buffer, Cell, CursorState, Gauge, Line, Rect, Span, Sparkline, StatusBar, Toast, Widget,
 };
