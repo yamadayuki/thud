@@ -63,6 +63,29 @@ impl Anchor {
     }
 }
 
+/// Box border style for floating overlays and HUD panels.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BorderStyle {
+    #[default]
+    None,
+    Single,
+    Rounded,
+    Double,
+}
+
+impl BorderStyle {
+    /// Returns `(top_left, top_right, bottom_left, bottom_right, horizontal, vertical)` box chars.
+    pub fn chars(self) -> Option<(char, char, char, char, char, char)> {
+        match self {
+            BorderStyle::None => None,
+            BorderStyle::Single => Some(('┌', '┐', '└', '┘', '─', '│')),
+            BorderStyle::Rounded => Some(('╭', '╮', '╰', '╯', '─', '│')),
+            BorderStyle::Double => Some(('╔', '╗', '╚', '╝', '═', '║')),
+        }
+    }
+}
+
 /// Policy when the child terminal's cursor or text collides with a floating overlay.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "mode", rename_all = "snake_case")]
@@ -108,12 +131,29 @@ pub enum ScreenCondition {
     Always,
     PrimaryOnly,
     AlternateOnly,
+    /// Visible only when the user toggles the HUD Dashboard mode via hotkey.
+    DashboardOnly,
+}
+
+/// Optional per-widget segment styling and capsule/powerline affixes.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct SegmentFormat {
+    #[serde(default)]
+    pub fg_ansi: Option<u8>,
+    #[serde(default)]
+    pub bg_ansi: Option<u8>,
+    #[serde(default)]
+    pub bold: Option<bool>,
+    #[serde(default)]
+    pub prefix: Option<String>,
+    #[serde(default)]
+    pub suffix: Option<String>,
 }
 
 /// Declarative widget data source specification.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
-pub enum WidgetSpec {
+pub enum WidgetKind {
     /// Local wall-clock time formatted with `chrono` strftime syntax.
     Clock {
         #[serde(default = "default_clock_format")]
@@ -125,6 +165,11 @@ pub enum WidgetSpec {
     GitBranch,
     /// System battery percentage / status.
     Battery,
+    /// Foreground process telemetry (e.g. `⚙ cargo (12s)` when running >= `min_secs`).
+    ActiveCommand {
+        #[serde(default)]
+        min_secs: u64,
+    },
     /// Static text label.
     Text { text: String },
     /// Periodic shell command executed via `sh -c`.
@@ -136,6 +181,44 @@ pub enum WidgetSpec {
     },
     /// Named slot populated dynamically via IPC socket or builtin state map.
     IpcSlot { key: String },
+    /// Historical sparkline (`▁▂▃▄▅▆▇█`) for a numeric metric slot (`0..=100`).
+    Sparkline {
+        key: String,
+        #[serde(default = "default_sparkline_width")]
+        width: usize,
+    },
+    /// Horizontal progress/metric gauge (`━━━─── 60%`) for a numeric slot (`0..=100`).
+    Gauge {
+        key: String,
+        #[serde(default = "default_gauge_width")]
+        width: usize,
+        #[serde(default)]
+        label: Option<String>,
+    },
+}
+
+/// A widget specification combining a `WidgetKind` with optional per-segment styling.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WidgetSpec {
+    #[serde(flatten)]
+    pub kind: WidgetKind,
+    #[serde(flatten)]
+    pub style: SegmentFormat,
+}
+
+impl WidgetSpec {
+    pub fn new(kind: WidgetKind) -> Self {
+        Self {
+            kind,
+            style: SegmentFormat::default(),
+        }
+    }
+}
+
+impl From<WidgetKind> for WidgetSpec {
+    fn from(kind: WidgetKind) -> Self {
+        Self::new(kind)
+    }
 }
 
 fn default_clock_format() -> String {
@@ -144,6 +227,14 @@ fn default_clock_format() -> String {
 
 fn default_command_interval_ms() -> u64 {
     5000
+}
+
+fn default_sparkline_width() -> usize {
+    8
+}
+
+fn default_gauge_width() -> usize {
+    10
 }
 
 /// Docked bottom status line configuration (Vim-like status bar).
@@ -196,19 +287,20 @@ impl Default for StatusBarConfig {
             fg_ansi: default_status_fg(),
             bg_ansi: default_status_bg(),
             left: vec![
-                WidgetSpec::Cwd,
-                WidgetSpec::GitBranch,
-                WidgetSpec::IpcSlot {
+                WidgetSpec::new(WidgetKind::Cwd),
+                WidgetSpec::new(WidgetKind::GitBranch),
+                WidgetSpec::new(WidgetKind::ActiveCommand { min_secs: 2 }),
+                WidgetSpec::new(WidgetKind::IpcSlot {
                     key: "status".to_string(),
-                },
+                }),
             ],
             center: vec![],
-            right: vec![WidgetSpec::Battery],
+            right: vec![WidgetSpec::new(WidgetKind::Battery)],
         }
     }
 }
 
-/// Floating non-destructive overlay configuration (e.g., top-right clock).
+/// Floating non-destructive overlay configuration (e.g., top-right clock or bordered HUD panel).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OverlayConfig {
     pub id: String,
@@ -224,6 +316,10 @@ pub struct OverlayConfig {
     pub screen_mode: ScreenCondition,
     #[serde(default)]
     pub collision: CollisionPolicy,
+    #[serde(default)]
+    pub border: BorderStyle,
+    #[serde(default)]
+    pub title: Option<String>,
     #[serde(default = "default_overlay_fg")]
     pub fg_ansi: u8,
     #[serde(default = "default_overlay_bg")]
@@ -250,10 +346,22 @@ pub struct Config {
     pub shell: Option<String>,
     #[serde(default)]
     pub ipc_socket: Option<PathBuf>,
+    #[serde(default = "default_zen_toggle_key")]
+    pub zen_toggle_key: Option<String>,
+    #[serde(default = "default_dashboard_toggle_key")]
+    pub dashboard_toggle_key: Option<String>,
     #[serde(default)]
     pub status_bar: StatusBarConfig,
     #[serde(default = "default_overlays")]
     pub overlays: Vec<OverlayConfig>,
+}
+
+fn default_zen_toggle_key() -> Option<String> {
+    Some("ctrl-\\".to_string())
+}
+
+fn default_dashboard_toggle_key() -> Option<String> {
+    Some("ctrl-]".to_string())
 }
 
 fn default_overlays() -> Vec<OverlayConfig> {
@@ -268,12 +376,14 @@ fn default_overlays() -> Vec<OverlayConfig> {
             margin: 1,
             avoid_text: true,
         },
+        border: BorderStyle::None,
+        title: None,
         fg_ansi: default_overlay_fg(),
         bg_ansi: default_overlay_bg(),
         bold: true,
-        widget: WidgetSpec::Clock {
+        widget: WidgetSpec::new(WidgetKind::Clock {
             format: " %H:%M:%S ".to_string(),
-        },
+        }),
         ttl_ms: None,
     }]
 }
@@ -283,8 +393,33 @@ impl Default for Config {
         Self {
             shell: None,
             ipc_socket: None,
+            zen_toggle_key: default_zen_toggle_key(),
+            dashboard_toggle_key: default_dashboard_toggle_key(),
             status_bar: StatusBarConfig::default(),
             overlays: default_overlays(),
+        }
+    }
+}
+
+/// Toast notification severity level.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToastLevel {
+    #[default]
+    Info,
+    Success,
+    Warn,
+    Error,
+}
+
+impl ToastLevel {
+    /// Returns `(fg_ansi, bg_ansi, icon_prefix)` for this toast level.
+    pub fn palette(self) -> (u8, u8, &'static str) {
+        match self {
+            ToastLevel::Info => (231, 24, "ℹ "),
+            ToastLevel::Success => (231, 28, "✓ "),
+            ToastLevel::Warn => (232, 214, "⚠ "),
+            ToastLevel::Error => (231, 160, "✗ "),
         }
     }
 }
@@ -302,12 +437,33 @@ pub enum IpcMessage {
     },
     /// Clear a named IPC slot.
     ClearSlot { key: String },
-    /// Dynamically add or update a floating overlay (e.g., toast notification).
+    /// Push a numeric metric sample (`0..=100`) for sparkline and gauge widgets.
+    PushMetric {
+        key: String,
+        value: u8,
+        #[serde(default)]
+        label: Option<String>,
+        #[serde(default)]
+        ttl_ms: Option<u64>,
+    },
+    /// Enqueue a stacked toast notification overlay.
+    Toast {
+        message: String,
+        #[serde(default)]
+        level: ToastLevel,
+        #[serde(default = "default_toast_ttl_ms")]
+        ttl_ms: u64,
+    },
+    /// Dynamically add or update a floating overlay.
     UpsertOverlay { overlay: OverlayConfig },
     /// Remove a floating overlay by ID.
     RemoveOverlay { id: String },
     /// Gracefully terminate the active `cth` session.
     Quit,
+}
+
+fn default_toast_ttl_ms() -> u64 {
+    4000
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -393,6 +549,29 @@ impl Config {
         Ok(path)
     }
 
+    /// Parse a hotkey string like `"ctrl-\\"` (`0x1c`), `"ctrl-]"` (`0x1d`), or `"ctrl-g"` (`0x07`)
+    /// into its single raw control byte.
+    pub fn parse_hotkey_byte(spec: Option<&str>) -> Option<u8> {
+        let s = spec?.trim().to_ascii_lowercase();
+        let rest = s.strip_prefix("ctrl-")?;
+        match rest {
+            "\\" => Some(0x1c),
+            "]" => Some(0x1d),
+            "^" => Some(0x1e),
+            "_" => Some(0x1f),
+            "space" | "@" => Some(0x00),
+            c if c.len() == 1 => {
+                let b = c.as_bytes()[0];
+                if b.is_ascii_lowercase() {
+                    Some(b - b'a' + 1)
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
+
     /// Returns a self-documenting TOML configuration string containing all default values,
     /// available options, widget types, and CLI/IPC usage examples.
     pub fn annotated_default_toml() -> &'static str {
@@ -409,6 +588,12 @@ impl Config {
 # Defaults to "/tmp/cth-<pid>.sock" and is exported as $CTH_SOCKET inside the session.
 # ipc_socket = "/tmp/cth.sock"
 
+# Hotkey to toggle Zen Mode (temporarily hides all HUD elements and expands the PTY):
+zen_toggle_key = "ctrl-\\"
+
+# Hotkey to toggle Dashboard overlays (`screen_mode = "dashboard_only"`):
+dashboard_toggle_key = "ctrl-]"
+
 # -----------------------------------------------------------------------------
 # Docked Bottom Status Bar (Vim-like status line)
 # Reserves `height` row(s) at the bottom of the terminal so child applications
@@ -418,38 +603,44 @@ impl Config {
 enabled = true
 height = 1
 separator = " │ "
-# 256-color ANSI palette index (0-255): 255 = bright white, 236 = dark charcoal
+# Default 256-color ANSI palette index (0-255): 255 = bright white, 236 = dark charcoal
 fg_ansi = 255
 bg_ansi = 236
 
-# Widgets placed on the left side of the status bar.
+# Widgets placed on the left, center, and right of the status bar.
+# Every widget supports optional per-segment styling & capsule affixes:
+#   fg_ansi = 231, bg_ansi = 24, bold = true, prefix = " ", suffix = " "
+#
 # Available widget types (`type = ...`):
 #   1. { type = "cwd" }
 #      -> Current working directory of the foreground process (e.g. "~/dev/cth")
 #   2. { type = "git_branch" }
 #      -> Current Git branch or short commit SHA (e.g. "git:main")
-#   3. { type = "battery" }
+#   3. { type = "active_command", min_secs = 2 }
+#      -> Foreground process name & elapsed timer when running >= min_secs (e.g. "⚙ cargo (5s)")
+#   4. { type = "battery" }
 #      -> System battery level (e.g. "BAT 100%")
-#   4. { type = "clock", format = "%Y-%m-%d %H:%M:%S" }
+#   5. { type = "clock", format = "%Y-%m-%d %H:%M:%S" }
 #      -> Local time formatted with strftime syntax (default: "%H:%M:%S")
-#   5. { type = "text", text = "PROD" }
+#   6. { type = "text", text = "PROD" }
 #      -> Static label string
-#   6. { type = "command", id = "k8s", cmd = "kubectl config current-context", interval_ms = 5000 }
+#   7. { type = "command", id = "k8s", cmd = "kubectl config current-context", interval_ms = 5000 }
 #      -> Periodic non-blocking `sh -c` command output refreshed every `interval_ms`
-#   7. { type = "ipc_slot", key = "status" }
-#      -> Dynamic slot updated from shell hooks or external scripts via:
-#         `cth set status "BUILDING..." --ttl-ms 5000`
-#         `cth clear status`
+#   8. { type = "ipc_slot", key = "status" }
+#      -> Dynamic slot updated via `cth set status "BUILDING..." --ttl-ms 5000`
+#   9. { type = "sparkline", key = "cpu", width = 8 }
+#      -> Historical mini-graph (`▁▂▃▄▅▆▇█`) fed via `cth progress cpu 65`
+#  10. { type = "gauge", key = "build", width = 10, label = "Build" }
+#      -> Progress bar (`━━━─── 60%`) fed via `cth progress build 60 --label "Compiling"`
 left = [
     { type = "cwd" },
     { type = "git_branch" },
+    { type = "active_command", min_secs = 2 },
     { type = "ipc_slot", key = "status" },
 ]
 
-# Widgets placed in the center of the status bar.
 center = []
 
-# Widgets placed on the right side of the status bar.
 right = [
     { type = "battery" },
 ]
@@ -466,36 +657,31 @@ id = "clock"
 # Anchor position on the child terminal viewport:
 #   "top_right" | "top_left" | "top_center" | "bottom_right" | "bottom_left" | "bottom_center"
 anchor = "top_right"
-
-# Fine-grained cell offset from the anchor position.
 offset_x = 0
 offset_y = 0
-
-# Drawing order when multiple overlays exist (higher z_index renders on top).
 z_index = 10
 
 # Which screen buffer mode this overlay is visible in:
 #   "always"         -> Both normal shell and fullscreen TUI apps (vim, htop, less)
 #   "primary_only"   -> Only normal shell screen; hidden during fullscreen TUI apps
 #   "alternate_only" -> Only during fullscreen TUI apps
+#   "dashboard_only" -> Only when toggled via `dashboard_toggle_key` (default: Ctrl+])
 screen_mode = "always"
+
+# Optional box border around the overlay:
+#   "none" | "single" | "rounded" | "double"
+border = "none"
+# title = " TIME "
 
 # 256-color ANSI palette index (0-255) and text weight
 fg_ansi = 231
 bg_ansi = 238
 bold = true
 
-# Optional: Time-to-live in milliseconds (mainly used for temporary IPC overlays/toasts).
-# ttl_ms = 4000
-
 # Behavior when the child cursor or terminal text reaches the overlay region:
 #   1. { mode = "dodge_to_opposite_corner", margin = 1, avoid_text = true }
-#      -> Moves to an unoccupied corner or slides down along the edge when the cursor
-#         approaches within `margin` cells or when underlying text is present.
 #   2. { mode = "auto_hide", margin = 1, avoid_text = true }
-#      -> Temporarily hides while the cursor or text overlaps the overlay.
 #   3. { mode = "ignore" }
-#      -> Always renders at the fixed anchor position.
 [overlays.collision]
 mode = "dodge_to_opposite_corner"
 margin = 1
@@ -538,43 +724,41 @@ mod tests {
     }
 
     #[test]
-    fn parses_custom_toml_with_builtins_commands_and_ipc_slots() {
+    fn parses_custom_toml_with_segment_styles_borders_sparkline_and_gauge() {
         let toml_input = r#"
             shell = "/bin/zsh"
+            zen_toggle_key = "ctrl-g"
 
             [status_bar]
             enabled = true
             height = 1
-            separator = " | "
+            separator = ""
             left = [
-                { type = "cwd" },
-                { type = "git_branch" },
-                { type = "ipc_slot", key = "vim_mode" }
+                { type = "cwd", fg_ansi = 231, bg_ansi = 24, bold = true, prefix = " ", suffix = " " },
+                { type = "git_branch", fg_ansi = 232, bg_ansi = 148, prefix = " ", suffix = " " },
+                { type = "sparkline", key = "cpu", width = 6 }
             ]
             right = [
-                { type = "command", id = "k8s", cmd = "kubectl config current-context", interval_ms = 10000 },
+                { type = "gauge", key = "build", width = 8, label = "Build" },
                 { type = "battery" }
             ]
 
             [[overlays]]
-            id = "top_clock"
+            id = "top_panel"
             anchor = "top_right"
+            border = "rounded"
+            title = " CLOCK "
             collision = { mode = "auto_hide", margin = 2 }
             widget = { type = "clock", format = "%H:%M" }
         "#;
 
         let cfg = Config::from_toml(toml_input).expect("valid TOML");
         assert_eq!(cfg.shell.as_deref(), Some("/bin/zsh"));
+        assert_eq!(Config::parse_hotkey_byte(cfg.zen_toggle_key.as_deref()), Some(0x07));
         assert_eq!(cfg.status_bar.left.len(), 3);
-        assert_eq!(cfg.status_bar.right.len(), 2);
-        assert_eq!(cfg.overlays.len(), 1);
-        assert_eq!(
-            cfg.overlays[0].collision,
-            CollisionPolicy::AutoHide {
-                margin: 2,
-                avoid_text: true
-            }
-        );
+        assert_eq!(cfg.status_bar.left[0].style.bg_ansi, Some(24));
+        assert_eq!(cfg.overlays[0].border, BorderStyle::Rounded);
+        assert_eq!(cfg.overlays[0].title.as_deref(), Some(" CLOCK "));
     }
 
     #[test]
@@ -606,10 +790,7 @@ mod tests {
 
         let written = Config::write_default_file(Some(temp_path.clone()), false).unwrap();
         assert_eq!(written, temp_path);
-        assert_eq!(
-            Config::from_file(&temp_path).unwrap(),
-            Config::default()
-        );
+        assert_eq!(Config::from_file(&temp_path).unwrap(), Config::default());
 
         // Second write without `force` must fail
         assert!(Config::write_default_file(Some(temp_path.clone()), false).is_err());
@@ -620,4 +801,3 @@ mod tests {
         let _ = fs::remove_file(&temp_path);
     }
 }
-

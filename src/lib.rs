@@ -4,8 +4,8 @@ pub mod session;
 
 pub use compositor::{BuiltinValues, Compositor, Event, Transition};
 pub use config::{
-    Anchor, CellStyle, CollisionPolicy, Color, Config, ConfigError, IpcMessage, OverlayConfig,
-    ScreenCondition, StatusBarConfig, TermSize, WidgetSpec,
+    Anchor, BorderStyle, CellStyle, CollisionPolicy, Color, Config, ConfigError, IpcMessage,
+    OverlayConfig, ScreenCondition, SegmentFormat, StatusBarConfig, TermSize, ToastLevel,
+    WidgetKind, WidgetSpec,
 };
 pub use session::{HeadlessHarness, Session, SessionError};
-
