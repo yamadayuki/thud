@@ -63,21 +63,27 @@ impl Anchor {
     }
 }
 
-/// Policy when the child terminal's cursor collides with a floating overlay.
+/// Policy when the child terminal's cursor or text collides with a floating overlay.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "mode", rename_all = "snake_case")]
 pub enum CollisionPolicy {
-    /// Always render the overlay at its anchor regardless of cursor position.
+    /// Always render the overlay at its anchor regardless of cursor position or underlying text.
     Ignore,
-    /// Temporarily hide the overlay while the child cursor is within `margin` cells.
+    /// Temporarily hide the overlay while the child cursor is within `margin` cells
+    /// (or while underlying cells contain non-space text if `avoid_text` is true).
     AutoHide {
         #[serde(default = "default_collision_margin")]
         margin: u16,
+        #[serde(default = "default_true")]
+        avoid_text: bool,
     },
-    /// Move the overlay to the opposite horizontal anchor while the child cursor is within `margin` cells.
+    /// Move the overlay to an unoccupied position when the child cursor is within `margin` cells
+    /// (or when underlying cells contain non-space text if `avoid_text` is true).
     DodgeToOppositeCorner {
         #[serde(default = "default_collision_margin")]
         margin: u16,
+        #[serde(default = "default_true")]
+        avoid_text: bool,
     },
 }
 
@@ -87,7 +93,10 @@ fn default_collision_margin() -> u16 {
 
 impl Default for CollisionPolicy {
     fn default() -> Self {
-        CollisionPolicy::DodgeToOppositeCorner { margin: 1 }
+        CollisionPolicy::DodgeToOppositeCorner {
+            margin: 1,
+            avoid_text: true,
+        }
     }
 }
 
@@ -255,7 +264,10 @@ fn default_overlays() -> Vec<OverlayConfig> {
         offset_y: 0,
         z_index: 10,
         screen_mode: ScreenCondition::Always,
-        collision: CollisionPolicy::DodgeToOppositeCorner { margin: 1 },
+        collision: CollisionPolicy::DodgeToOppositeCorner {
+            margin: 1,
+            avoid_text: true,
+        },
         fg_ansi: default_overlay_fg(),
         bg_ansi: default_overlay_bg(),
         bold: true,
@@ -369,7 +381,10 @@ mod tests {
         assert_eq!(cfg.overlays[0].anchor, Anchor::TopRight);
         assert_eq!(
             cfg.overlays[0].collision,
-            CollisionPolicy::DodgeToOppositeCorner { margin: 1 }
+            CollisionPolicy::DodgeToOppositeCorner {
+                margin: 1,
+                avoid_text: true
+            }
         );
     }
 
@@ -406,7 +421,10 @@ mod tests {
         assert_eq!(cfg.overlays.len(), 1);
         assert_eq!(
             cfg.overlays[0].collision,
-            CollisionPolicy::AutoHide { margin: 2 }
+            CollisionPolicy::AutoHide {
+                margin: 2,
+                avoid_text: true
+            }
         );
     }
 
@@ -424,3 +442,4 @@ mod tests {
         );
     }
 }
+

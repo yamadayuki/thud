@@ -5,7 +5,6 @@ use std::collections::HashMap;
 use std::ffi::CString;
 use std::fs;
 use std::io::{self, BufRead, BufReader, Write};
-use std::os::fd::AsRawFd;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -247,6 +246,9 @@ impl Session {
         if let Some(new_size) = tx.child_pty_resize {
             pty.resize(new_size)?;
         }
+        if !tx.child_pty_input.is_empty() {
+            pty.write_all(&tx.child_pty_input)?;
+        }
         if !tx.host_ansi_diff.is_empty() {
             host.write_diff(&tx.host_ansi_diff)?;
         }
@@ -405,20 +407,17 @@ impl HeadlessHarness {
 // ============================================================================
 
 struct OsHostTerminal {
-    tty_file: fs::File,
+    stdin_fd: libc::c_int,
+    stdout: io::Stdout,
     orig_termios: libc::termios,
 }
 
 impl OsHostTerminal {
     fn enter() -> io::Result<Self> {
-        let tty_file = fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open("/dev/tty")?;
-        let fd = tty_file.as_raw_fd();
+        let stdin_fd = libc::STDIN_FILENO;
 
         let mut orig_termios: libc::termios = unsafe { std::mem::zeroed() };
-        if unsafe { libc::tcgetattr(fd, &mut orig_termios) } != 0 {
+        if unsafe { libc::tcgetattr(stdin_fd, &mut orig_termios) } != 0 {
             return Err(io::Error::last_os_error());
         }
 
@@ -426,7 +425,7 @@ impl OsHostTerminal {
         unsafe {
             libc::cfmakeraw(&mut raw);
         }
-        if unsafe { libc::tcsetattr(fd, libc::TCSANOW, &raw) } != 0 {
+        if unsafe { libc::tcsetattr(stdin_fd, libc::TCSANOW, &raw) } != 0 {
             return Err(io::Error::last_os_error());
         }
 
@@ -440,7 +439,8 @@ impl OsHostTerminal {
         }
 
         let mut host = Self {
-            tty_file,
+            stdin_fd,
+            stdout: io::stdout(),
             orig_termios,
         };
         // Enter outer alternate screen buffer and clear screen
@@ -449,12 +449,14 @@ impl OsHostTerminal {
     }
 
     fn tty_fd(&self) -> libc::c_int {
-        self.tty_file.as_raw_fd()
+        self.stdin_fd
     }
 
     fn size(&self) -> io::Result<TermSize> {
         let mut ws: libc::winsize = unsafe { std::mem::zeroed() };
-        if unsafe { libc::ioctl(self.tty_fd(), libc::TIOCGWINSZ, &mut ws) } != 0 {
+        if unsafe { libc::ioctl(self.stdin_fd, libc::TIOCGWINSZ, &mut ws) } != 0
+            && unsafe { libc::ioctl(libc::STDOUT_FILENO, libc::TIOCGWINSZ, &mut ws) } != 0
+        {
             return Err(io::Error::last_os_error());
         }
         Ok(TermSize {
@@ -464,19 +466,17 @@ impl OsHostTerminal {
     }
 
     fn write_diff(&mut self, bytes: &[u8]) -> io::Result<()> {
-        self.tty_file.write_all(bytes)?;
-        self.tty_file.flush()
+        let mut lock = self.stdout.lock();
+        lock.write_all(bytes)?;
+        lock.flush()
     }
 }
 
 impl Drop for OsHostTerminal {
     fn drop(&mut self) {
-        let _ = self
-            .tty_file
-            .write_all(b"\x1b[0m\x1b[?25h\x1b[?1049l");
-        let _ = self.tty_file.flush();
+        let _ = self.write_diff(b"\x1b[0m\x1b[?25h\x1b[?1049l");
         unsafe {
-            libc::tcsetattr(self.tty_fd(), libc::TCSANOW, &self.orig_termios);
+            libc::tcsetattr(self.stdin_fd, libc::TCSANOW, &self.orig_termios);
         }
     }
 }
@@ -788,7 +788,7 @@ fn probe_battery() -> Option<String> {
         for token in text.split_whitespace() {
             let cleaned = token.trim_end_matches(';');
             if cleaned.ends_with('%') {
-                return Some(format!("🔋{cleaned}"));
+                return Some(format!("BAT {cleaned}"));
             }
         }
         None
@@ -796,7 +796,7 @@ fn probe_battery() -> Option<String> {
     #[cfg(not(target_os = "macos"))]
     {
         let cap = fs::read_to_string("/sys/class/power_supply/BAT0/capacity").ok()?;
-        Some(format!("🔋{}%", cap.trim()))
+        Some(format!("BAT {}%", cap.trim()))
     }
 }
 

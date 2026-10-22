@@ -57,7 +57,10 @@ fn try_main() -> Result<(), SessionError> {
                 offset_y: 0,
                 z_index: 50,
                 screen_mode: ScreenCondition::Always,
-                collision: CollisionPolicy::AutoHide { margin: 1 },
+                collision: CollisionPolicy::AutoHide {
+                    margin: 1,
+                    avoid_text: false,
+                },
                 fg_ansi: 15,
                 bg_ansi: 24,
                 bold: true,

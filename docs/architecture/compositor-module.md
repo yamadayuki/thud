@@ -3,7 +3,7 @@ type: Architecture
 title: "Deep Compositor & Session Module Architecture"
 description: Two-tier deep module design pairing a deterministic Sans-I/O Compositor core with a declarative Session runner.
 tags: [architecture, codebase-design, compositor, seam, sans-io]
-generated: { by: agent/cli, at: "2026-10-22T05:17:29Z" }
+generated: { by: antigravity/gemini-4, at: "2026-10-22T05:42:51Z" }
 status: stable
 ---
 
@@ -22,15 +22,15 @@ flowchart TB
     subgraph SessionModule["Module: Session (Common-Caller Seam)"]
         SessionRun["Session::run / Session::run_headless"]
         subgraph InternalSeam["Internal Seam: RuntimeEnv"]
-            OsAdapter["Adapter: OsRuntimeAdapter (PTY, TTY, UDS, Mio)"]
+            OsAdapter["Adapter: OsRuntimeAdapter (STDIN/STDOUT, PTY, UDS, Poll)"]
             HeadlessAdapter["Adapter: HeadlessRuntimeAdapter (In-Memory)"]
         end
     end
 
     subgraph CompositorModule["Module: Compositor (Sans-I/O Deep Core Seam)"]
         Step["Compositor::new / Compositor::step(Event, Instant) -> Transition"]
-        VTE["Dual-Screen VT State Machine (Primary & Alternate)"]
-        Layout["HUD Layout Engine (Docked & Floating + Cursor Collision Policy)"]
+        VTE["Dual-Screen VT State Machine & Query Responder"]
+        Layout["HUD Layout Engine (Docked & Floating + Text/Cursor Dodge)"]
         CJK["Split-Wide-Char Healing (CJK 2-Cell Masking)"]
         Diff["Double-Buffered Minimal ANSI Diff Emitter"]
         Step --> VTE
@@ -52,12 +52,13 @@ flowchart TB
 ### 1. Inner Deep Module: `Compositor` (In-Process Seam)
 
 - **Interface**:
-  - `Compositor::new(host_size: TermSize, config: Config, now: Instant) -> Result<(Self, Transition), CompositorError>`
+  - `Compositor::new(host_size: TermSize, config: Config, now: Instant) -> Result<(Self, Transition), ConfigError>`
   - `Compositor::step(&mut self, event: Event<'_>, now: Instant) -> Transition`
 - **What sits behind the seam (Implementation)**:
   - Stateful UTF-8 and VT100/xterm parser across arbitrary byte chunk splits.
+  - Terminal capability/status query responder (`Transition::child_pty_input`) replying to `DA1` (`\x1b[c` / `\x1b[0c`), `DA2` (`\x1b[>c`), `DSR 5/6` (`\x1b[5n` / `\x1b[6n`), `XTVERSION` (`\x1b[>0q`), Kitty keyboard queries (`\x1b[?u`), and `OSC 10/11` color queries so modern shells like `fish` start without delay or warnings.
   - Primary and Alternate (`?1049h`/`?1049l`) cell grids, scroll regions (`DECSTBM`), and cursor state.
-  - `Placement::Docked` (reserving rows via `Transition::child_pty_resize`) and `Placement::Floating` (corner-anchored overlays with `CollisionPolicy::AutoHide` or `DodgeToOppositeCorner` when the child cursor collides with the overlay).
+  - Docked status bar (reserving rows via `Transition::child_pty_resize`) and floating overlays with cursor and underlying non-whitespace text collision dodging (`CollisionPolicy::AutoHide` or `DodgeToOppositeCorner { margin, avoid_text }`).
   - Split-wide-character healing when an overlay edge lands on half of a 2-cell CJK character.
   - Double-buffered cell diffing that emits minimal ANSI sequences (`Transition::host_ansi_diff`) and restores the child's exact cursor coordinates and visibility.
 
@@ -65,9 +66,9 @@ flowchart TB
 
 - **External Interface**:
   - `Session::run(config: Config) -> Result<i32, SessionError>` for production CLI startup.
-  - `Session::run_headless(config: Config, cols: u16, rows: u16) -> HeadlessHarness` for multi-step integration tests.
-- **Internal Seam (`RuntimeEnv`)**:
-  - Connects `OsRuntimeAdapter` (real `/dev/tty` raw mode, `forkpty`, `TIOCSWINSZ`, `SIGWINCH`, Unix domain socket listener, non-blocking `sh -c` process pool) or `HeadlessRuntimeAdapter` to `Compositor::step`.
+  - `Session::run_headless(config: Config, cols: u16, rows: u16) -> Result<HeadlessHarness, SessionError>` for multi-step integration tests.
+- **Internal Seam & OS Constraints**:
+  - On macOS (XNU), `poll(2)` on `/dev/tty` immediately returns `POLLNVAL (0x20)` rather than `POLLIN`. `OsHostTerminal` therefore polls and configures `STDIN_FILENO` (`0`) directly (which references the underlying slave PTY device) and writes diffs to `STDOUT_FILENO` (`1`).
 
 # Related Concepts
 - [Core Terminal HUD & Compositor Requirements](../requirements/core-hud-capabilities.md): satisfies core terminal HUD, full-screen overlay, and widget requirements

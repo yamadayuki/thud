@@ -39,6 +39,8 @@ pub enum Event<'a> {
 pub struct Transition {
     /// Minimal ANSI escape sequence diff to write to the host terminal's stdout.
     pub host_ansi_diff: Vec<u8>,
+    /// Reply bytes (e.g. DA1 / DSR cursor position reports) to write back to the child PTY master fd.
+    pub child_pty_input: Vec<u8>,
     /// New child PTY dimensions to apply via `TIOCSWINSZ` if changed.
     pub child_pty_resize: Option<TermSize>,
     /// Periodic shell commands `(id, cmd)` whose schedule is now due for async execution.
@@ -280,6 +282,7 @@ impl Compositor {
             comp,
             Transition {
                 host_ansi_diff,
+                child_pty_input: Vec::new(),
                 child_pty_resize: Some(child_size),
                 due_commands,
             },
@@ -289,12 +292,14 @@ impl Compositor {
     /// Entry point 2: Processes a single `Event` deterministically and returns the resulting `Transition`.
     /// This method is infallible.
     pub fn step(&mut self, event: Event<'_>, now: Instant) -> Transition {
+        let mut child_pty_input = Vec::new();
         let mut child_pty_resize = None;
         let mut due_commands = Vec::new();
 
         match event {
             Event::PtyOutput(bytes) => {
                 self.vt.process(bytes);
+                child_pty_input = self.respond_to_terminal_queries(bytes);
             }
             Event::HostResize(new_size) => {
                 let clamped = TermSize {
@@ -353,9 +358,110 @@ impl Compositor {
         let host_ansi_diff = self.compose_and_diff();
         Transition {
             host_ansi_diff,
+            child_pty_input,
             child_pty_resize,
             due_commands,
         }
+    }
+
+    /// Scans child PTY output for standard terminal capability/status queries (such as `DA1`, `DA2`,
+    /// `DSR 5/6`, `XTVERSION`, Kitty keyboard query `\x1b[?u`, and `OSC 10/11` color queries) and
+    /// synthesizes responses so shells like `fish` and TUI editors never block waiting for queries.
+    fn respond_to_terminal_queries(&self, bytes: &[u8]) -> Vec<u8> {
+        let mut reply = Vec::new();
+        let mut i = 0;
+        while i < bytes.len() {
+            if bytes[i] != 0x1b || i + 1 >= bytes.len() {
+                i += 1;
+                continue;
+            }
+            match bytes[i + 1] {
+                b'[' => {
+                    // CSI sequence: find final byte in 0x40..=0x7e
+                    let start = i + 2;
+                    let mut end = start;
+                    while end < bytes.len() && !(0x40..=0x7e).contains(&bytes[end]) {
+                        end += 1;
+                    }
+                    if end < bytes.len() {
+                        let params = &bytes[start..end];
+                        let final_byte = bytes[end];
+                        match (params, final_byte) {
+                            (b"" | b"0", b'c') => {
+                                // Primary Device Attributes (DA1) -> VT220 with ANSI color
+                                reply.extend_from_slice(b"\x1b[?62;22c");
+                            }
+                            (b">" | b">0", b'c') => {
+                                // Secondary Device Attributes (DA2)
+                                reply.extend_from_slice(b"\x1b[>0;10;1c");
+                            }
+                            (b"5", b'n') => {
+                                // Device Status Report (DSR 5) -> OK
+                                reply.extend_from_slice(b"\x1b[0n");
+                            }
+                            (b"6", b'n') => {
+                                // Cursor Position Report (DSR 6)
+                                let (r, c) = self.vt.screen().cursor_position();
+                                let _ = write!(
+                                    reply,
+                                    "\x1b[{};{}R",
+                                    r + 1,
+                                    c + 1
+                                );
+                            }
+                            (b"?6", b'n') => {
+                                let (r, c) = self.vt.screen().cursor_position();
+                                let _ = write!(
+                                    reply,
+                                    "\x1b[?{};{}R",
+                                    r + 1,
+                                    c + 1
+                                );
+                            }
+                            (b"?", b'u') => {
+                                // Kitty keyboard protocol query
+                                reply.extend_from_slice(b"\x1b[?0u");
+                            }
+                            (b">" | b">0", b'q') => {
+                                // XTVERSION query
+                                reply.extend_from_slice(b"\x1bP>|cth(0.1.0)\x1b\\");
+                            }
+                            _ => {}
+                        }
+                        i = end + 1;
+                        continue;
+                    }
+                }
+                b']' => {
+                    // OSC sequence: terminated by BEL (0x07) or ST (\x1b\\)
+                    let start = i + 2;
+                    let mut end = start;
+                    while end < bytes.len() {
+                        if bytes[end] == 0x07 {
+                            break;
+                        }
+                        if bytes[end] == 0x1b && end + 1 < bytes.len() && bytes[end + 1] == b'\\' {
+                            break;
+                        }
+                        end += 1;
+                    }
+                    if end < bytes.len() {
+                        let osc_body = &bytes[start..end];
+                        if osc_body == b"10;?" {
+                            reply.extend_from_slice(b"\x1b]10;rgb:e5e5/e5e5/e5e5\x1b\\");
+                        } else if osc_body == b"11;?" {
+                            reply.extend_from_slice(b"\x1b]11;rgb:1c1c/1c1c/1c1c\x1b\\");
+                        }
+                        i = end + 1;
+                        continue;
+                    }
+                }
+                _ => {}
+            }
+            i += 1;
+        }
+        use std::io::Write as _;
+        reply
     }
 
     /// Returns the current composited screen as plain text (one line per row, separated by `\n`).
@@ -573,41 +679,58 @@ impl Compositor {
             ov.offset_y,
         );
 
-        // Check cursor collision policy
+        // Check cursor & text collision policy
         match ov.collision {
             CollisionPolicy::Ignore => {}
-            CollisionPolicy::AutoHide { margin } => {
-                if Self::cursor_collides(
-                    grid.cursor_row,
-                    grid.cursor_col,
-                    row,
-                    col,
-                    width,
-                    margin,
-                ) {
+            CollisionPolicy::AutoHide { margin, avoid_text } => {
+                if Self::has_collision(grid, row, col, width, margin, avoid_text) {
                     return;
                 }
             }
-            CollisionPolicy::DodgeToOppositeCorner { margin } => {
-                if Self::cursor_collides(
-                    grid.cursor_row,
-                    grid.cursor_col,
-                    row,
-                    col,
-                    width,
-                    margin,
-                ) {
+            CollisionPolicy::DodgeToOppositeCorner { margin, avoid_text } => {
+                if Self::has_collision(grid, row, col, width, margin, avoid_text) {
+                    let mut candidates = Vec::new();
+                    // 1. Opposite horizontal corner on the same row
                     let opposite = ov.anchor.opposite_horizontal();
-                    let (dodged_row, dodged_col) = Self::resolve_anchor(
+                    candidates.push(Self::resolve_anchor(
                         opposite,
                         width,
                         child_size.cols,
                         child_size.rows,
                         -ov.offset_x,
                         ov.offset_y,
-                    );
-                    row = dodged_row;
-                    col = dodged_col;
+                    ));
+                    // 2. Slide down along the same column (e.g., below a wrapped 1st line or header)
+                    for r in (row + 1)..child_size.rows {
+                        candidates.push((r, col));
+                    }
+                    // 3. Slide up if anchored at the bottom
+                    if row > 0 {
+                        for r in (0..row).rev() {
+                            candidates.push((r, col));
+                        }
+                    }
+
+                    if let Some((free_r, free_c)) = candidates.into_iter().find(|&(cand_r, cand_c)| {
+                        !Self::has_collision(grid, cand_r, cand_c, width, margin, avoid_text)
+                    }) {
+                        row = free_r;
+                        col = free_c;
+                    } else if avoid_text {
+                        // Every candidate position has text/cursor collision; auto-hide rather than obscure text
+                        return;
+                    } else {
+                        let (dodged_row, dodged_col) = Self::resolve_anchor(
+                            opposite,
+                            width,
+                            child_size.cols,
+                            child_size.rows,
+                            -ov.offset_x,
+                            ov.offset_y,
+                        );
+                        row = dodged_row;
+                        col = dodged_col;
+                    }
                 }
             }
         }
@@ -650,6 +773,36 @@ impl Compositor {
         let c = (base_col + i32::from(offset_x))
             .clamp(0, i32::from(cols.saturating_sub(width))) as u16;
         (r, c)
+    }
+
+    fn has_collision(
+        grid: &FrameGrid,
+        ov_row: u16,
+        ov_col: u16,
+        ov_width: u16,
+        margin: u16,
+        avoid_text: bool,
+    ) -> bool {
+        if Self::cursor_collides(
+            grid.cursor_row,
+            grid.cursor_col,
+            ov_row,
+            ov_col,
+            ov_width,
+            margin,
+        ) {
+            return true;
+        }
+        if avoid_text {
+            for c in ov_col..(ov_col + ov_width).min(grid.cols) {
+                if let Some(cell) = grid.get(ov_row, c)
+                    && (cell.width == 0 || !cell.ch.trim().is_empty())
+                {
+                    return true;
+                }
+            }
+        }
+        false
     }
 
     fn cursor_collides(
@@ -906,8 +1059,10 @@ mod tests {
     #[test]
     fn heals_split_cjk_wide_characters_and_restores_cleanly_in_alternate_screen() {
         let now = Instant::now();
+        let mut cfg = sample_config();
+        cfg.overlays[0].collision = CollisionPolicy::Ignore;
         let (mut comp, _) =
-            Compositor::new(TermSize { cols: 20, rows: 4 }, sample_config(), now).unwrap();
+            Compositor::new(TermSize { cols: 20, rows: 4 }, cfg, now).unwrap();
 
         let fixed_time = Local.with_ymd_and_hms(2026, 10, 22, 9, 5, 0).unwrap();
         comp.step(
@@ -997,4 +1152,50 @@ mod tests {
         );
         assert!(!comp.rendered_text().contains("BUILD"));
     }
+
+    #[test]
+    fn dodges_underlying_text_when_first_line_reaches_top_right() {
+        let now = Instant::now();
+        let (mut comp, _) =
+            Compositor::new(TermSize { cols: 20, rows: 4 }, sample_config(), now).unwrap();
+
+        let fixed_time = Local.with_ymd_and_hms(2026, 10, 22, 14, 30, 0).unwrap();
+        comp.step(
+            Event::Tick {
+                wall_clock: fixed_time,
+                builtins: BuiltinValues::default(),
+            },
+            now,
+        );
+
+        // Fill the entire 1st row with 20 characters ("0123456789abcdefghij")
+        comp.step(Event::PtyOutput(b"0123456789abcdefghij\r\nOK"), now);
+
+        // Row 0 is completely preserved without being overwritten by "14:30",
+        // and the clock automatically slides down to row 1 at the right edge!
+        let rendered = comp.rendered_text();
+        let lines: Vec<&str> = rendered.lines().collect();
+        assert_eq!(lines[0], "0123456789abcdefghij");
+        assert_eq!(lines[1], "OK             14:30");
+    }
+
+    #[test]
+    fn responds_to_fish_and_vt_terminal_queries() {
+        let now = Instant::now();
+        let (mut comp, _) =
+            Compositor::new(TermSize { cols: 80, rows: 24 }, sample_config(), now).unwrap();
+
+        // Simulate fish 4.x startup query burst + cursor position query
+        let tx = comp.step(
+            Event::PtyOutput(b"hello\x1b[?u\x1b[>0q\x1b]11;?\x1b\\\x1b[0c\x1b[6n"),
+            now,
+        );
+        let reply = String::from_utf8_lossy(&tx.child_pty_input);
+        assert!(reply.contains("\x1b[?0u"));
+        assert!(reply.contains("\x1bP>|cth(0.1.0)\x1b\\"));
+        assert!(reply.contains("\x1b]11;rgb:1c1c/1c1c/1c1c\x1b\\"));
+        assert!(reply.contains("\x1b[?62;22c"));
+        assert!(reply.contains("\x1b[1;6R"));
+    }
 }
+
