@@ -86,10 +86,22 @@ flowchart LR
 
 ## Installation
 
-Build and install from source using Cargo:
+### From GitHub (Recommended)
+
+Install the latest release directly using Cargo:
 
 ```sh
-cargo install --path .
+cargo install --locked --git https://github.com/yamadayuki/thud.git
+```
+
+### From Source
+
+Clone the repository and install locally:
+
+```sh
+git clone https://github.com/yamadayuki/thud.git
+cd thud
+cargo install --locked --path .
 ```
 
 ---
@@ -213,3 +225,14 @@ make test
 2. `cargo fmt --check`
 3. `cargo clippy --all-targets -- -D warnings`
 4. `cargo test` (27 unit tests + PTY E2E test suite)
+
+---
+
+## License
+
+Licensed under either of:
+
+- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE) or http://www.apache.org/licenses/LICENSE-2.0)
+- MIT license ([LICENSE-MIT](LICENSE-MIT) or http://opensource.org/licenses/MIT)
+
+at your option.

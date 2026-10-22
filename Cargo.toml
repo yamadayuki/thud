@@ -3,6 +3,12 @@ name = "thud"
 version = "0.1.0"
 edition = "2024"
 description = "Terminal Heads Up Display - terminal-emulator-agnostic and shell-agnostic HUD compositor"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/yamadayuki/thud"
+homepage = "https://github.com/yamadayuki/thud"
+readme = "README.md"
+keywords = ["terminal", "hud", "pty", "compositor", "status-bar"]
+categories = ["command-line-utilities"]
 
 [dependencies]
 chrono = "0.4"
