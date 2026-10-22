@@ -1,16 +1,21 @@
-.PHONY: all validate test search help
+.PHONY: all validate lint test search help
 
 OKF_BIN ?= $(shell command -v okf 2>/dev/null || echo "bin/okf")
 BUNDLE := docs
 
-all: validate
+all: test
 
 ## validate: Run strict OKF v0.2 validation on the docs/ bundle
 validate:
 	@$(OKF_BIN) validate $(BUNDLE) --strict --drift
 
-## test: Run Rust unit + Outer-PTY E2E tests and OKF bundle validation
-test: validate
+## lint: Run rustfmt check and clippy with warnings denied across all targets
+lint:
+	@cargo fmt --check
+	@cargo clippy --all-targets -- -D warnings
+
+## test: Run OKF validation, lint (fmt + clippy), and Rust unit + Outer-PTY E2E tests
+test: validate lint
 	@cargo test
 
 ## search: Search project memory (e.g. make search q="auth")

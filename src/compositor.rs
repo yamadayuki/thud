@@ -964,11 +964,13 @@ impl Compositor {
                         }
                     }
 
-                    if let Some((free_r, free_c)) = candidates.into_iter().find(|&(cand_r, cand_c)| {
-                        !Self::box_has_collision(
-                            grid, cand_r, cand_c, box_width, box_height, margin, avoid_text,
-                        )
-                    }) {
+                    if let Some((free_r, free_c)) =
+                        candidates.into_iter().find(|&(cand_r, cand_c)| {
+                            !Self::box_has_collision(
+                                grid, cand_r, cand_c, box_width, box_height, margin, avoid_text,
+                            )
+                        })
+                    {
                         row = free_r;
                         col = free_c;
                     } else if avoid_text {
@@ -1163,14 +1165,12 @@ impl Compositor {
         };
         let base_col: i32 = match anchor {
             Anchor::TopLeft | Anchor::BottomLeft => 0,
-            Anchor::TopCenter | Anchor::BottomCenter => {
-                i32::from(cols.saturating_sub(width) / 2)
-            }
+            Anchor::TopCenter | Anchor::BottomCenter => i32::from(cols.saturating_sub(width) / 2),
             Anchor::TopRight | Anchor::BottomRight => i32::from(cols.saturating_sub(width)),
         };
 
-        let r =
-            (base_row + i32::from(offset_y)).clamp(0, i32::from(rows.saturating_sub(height))) as u16;
+        let r = (base_row + i32::from(offset_y)).clamp(0, i32::from(rows.saturating_sub(height)))
+            as u16;
         let c =
             (base_col + i32::from(offset_x)).clamp(0, i32::from(cols.saturating_sub(width))) as u16;
         (r, c)
@@ -1706,7 +1706,10 @@ mod tests {
         // 3. Toggle Zen Mode via Ctrl+\ (0x1c) -> HUD hidden and child PTY expands to 20x4!
         let tx_zen = comp.step(Event::HostInput(b"\x1c"), t3);
         assert!(comp.is_zen_mode());
-        assert_eq!(tx_zen.child_pty_resize, Some(TermSize { cols: 20, rows: 4 }));
+        assert_eq!(
+            tx_zen.child_pty_resize,
+            Some(TermSize { cols: 20, rows: 4 })
+        );
         assert!(!comp.rendered_text().contains("DASHBOARD"));
         assert!(!comp.rendered_text().contains("⚙ cargo"));
     }

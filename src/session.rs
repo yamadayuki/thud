@@ -161,10 +161,10 @@ impl Session {
                     if n > 0 {
                         let tx = compositor.step(Event::PtyOutput(&buf[..n as usize]), loop_now);
                         Self::apply_os_transition(&tx, &mut host, &mut pty, &cmd_tx)?;
-                    } else if n == 0 || (fds[1].revents & libc::POLLHUP) != 0 {
-                        if let Some(code) = pty.try_wait()? {
-                            break code;
-                        }
+                    } else if (n == 0 || (fds[1].revents & libc::POLLHUP) != 0)
+                        && let Some(code) = pty.try_wait()?
+                    {
+                        break code;
                     }
                 }
             }
@@ -331,7 +331,11 @@ impl HeadlessHarness {
     }
 
     /// Registers a canned output for a periodic shell command ID in headless mode.
-    pub fn stub_command_output(&mut self, id: impl Into<String>, output: impl Into<String>) -> &mut Self {
+    pub fn stub_command_output(
+        &mut self,
+        id: impl Into<String>,
+        output: impl Into<String>,
+    ) -> &mut Self {
         self.stub_commands.insert(id.into(), output.into());
         self
     }
@@ -526,7 +530,11 @@ impl OsChildPty {
             }
             let c_shell = CString::new(shell).unwrap_or_else(|_| CString::new("/bin/sh").unwrap());
             unsafe {
-                libc::execlp(c_shell.as_ptr(), c_shell.as_ptr(), std::ptr::null::<libc::c_char>());
+                libc::execlp(
+                    c_shell.as_ptr(),
+                    c_shell.as_ptr(),
+                    std::ptr::null::<libc::c_char>(),
+                );
                 libc::_exit(127);
             }
         }
@@ -699,18 +707,15 @@ fn read_process_name(pid: libc::pid_t) -> Option<String> {
         fn proc_name(pid: libc::c_int, buffer: *mut libc::c_void, buffersize: u32) -> libc::c_int;
     }
     let mut buf = [0u8; 256];
-    let ret = unsafe {
-        proc_name(
-            pid,
-            buf.as_mut_ptr() as *mut libc::c_void,
-            buf.len() as u32,
-        )
-    };
+    let ret = unsafe { proc_name(pid, buf.as_mut_ptr() as *mut libc::c_void, buf.len() as u32) };
     if ret <= 0 {
         return None;
     }
     let len = (ret as usize).min(buf.len());
-    let name = std::str::from_utf8(&buf[..len]).ok()?.trim_matches('\0').trim();
+    let name = std::str::from_utf8(&buf[..len])
+        .ok()?
+        .trim_matches('\0')
+        .trim();
     if name.is_empty() {
         None
     } else {
@@ -920,8 +925,7 @@ mod tests {
 
     #[test]
     fn unix_socket_ipc_roundtrip_delivers_messages_and_cleans_up_on_drop() {
-        let sock_path =
-            std::env::temp_dir().join(format!("cth-test-{}.sock", std::process::id()));
+        let sock_path = std::env::temp_dir().join(format!("cth-test-{}.sock", std::process::id()));
         {
             let server = OsIpcServer::bind(&sock_path).unwrap();
             Session::send_ipc_message(

@@ -510,9 +510,18 @@ impl Config {
             .map(|home| PathBuf::from(home).join(".config/cth/config.toml"))
     }
 
-    /// Loads configuration from `$CTH_CONFIG` or `~/.config/cth/config.toml` if present,
+    /// Loads configuration from `$CTH_CONFIG` (if set) or `~/.config/cth/config.toml` if present,
     /// falling back to `Config::default()`.
     pub fn load_or_default() -> Result<Self, ConfigError> {
+        if let Ok(custom_path) = std::env::var("CTH_CONFIG")
+            && !custom_path.is_empty()
+        {
+            let p = PathBuf::from(custom_path);
+            if p.exists() {
+                return Self::from_file(p);
+            }
+            return Ok(Self::default());
+        }
         if let Some(path) = Self::default_path()
             && path.exists()
         {
@@ -528,7 +537,9 @@ impl Config {
         force: bool,
     ) -> Result<PathBuf, ConfigError> {
         let path = target_path.or_else(Self::default_path).ok_or_else(|| {
-            ConfigError::Io("could not determine default config path ($HOME is not set)".to_string())
+            ConfigError::Io(
+                "could not determine default config path ($HOME is not set)".to_string(),
+            )
         })?;
 
         if path.exists() && !force {
@@ -754,7 +765,10 @@ mod tests {
 
         let cfg = Config::from_toml(toml_input).expect("valid TOML");
         assert_eq!(cfg.shell.as_deref(), Some("/bin/zsh"));
-        assert_eq!(Config::parse_hotkey_byte(cfg.zen_toggle_key.as_deref()), Some(0x07));
+        assert_eq!(
+            Config::parse_hotkey_byte(cfg.zen_toggle_key.as_deref()),
+            Some(0x07)
+        );
         assert_eq!(cfg.status_bar.left.len(), 3);
         assert_eq!(cfg.status_bar.left[0].style.bg_ansi, Some(24));
         assert_eq!(cfg.overlays[0].border, BorderStyle::Rounded);

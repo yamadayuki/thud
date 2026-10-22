@@ -1,4 +1,4 @@
-use libc::{c_int, c_void, pollfd, winsize, POLLIN, TIOCSWINSZ};
+use libc::{POLLIN, TIOCSWINSZ, c_int, c_void, pollfd, winsize};
 use std::ffi::CString;
 use std::io;
 use std::time::{Duration, Instant};
@@ -40,6 +40,8 @@ impl OuterTerminalSimulator {
         if pid == 0 {
             unsafe {
                 std::env::set_var("TERM", "xterm-256color");
+                // Isolate E2E tests from the developer's personal ~/.config/cth/config.toml
+                std::env::set_var("CTH_CONFIG", "/tmp/cth-e2e-nonexistent-default.toml");
             }
             let c_bin = CString::new(bin_path).unwrap();
             let mut c_args: Vec<CString> = Vec::with_capacity(args.len() + 1);
@@ -74,13 +76,8 @@ impl OuterTerminalSimulator {
     fn send_keys(&mut self, bytes: &[u8]) -> io::Result<()> {
         let mut rem = bytes;
         while !rem.is_empty() {
-            let n = unsafe {
-                libc::write(
-                    self.master_fd,
-                    rem.as_ptr() as *const c_void,
-                    rem.len(),
-                )
-            };
+            let n =
+                unsafe { libc::write(self.master_fd, rem.as_ptr() as *const c_void, rem.len()) };
             if n > 0 {
                 rem = &rem[n as usize..];
             } else {
@@ -128,11 +125,7 @@ impl OuterTerminalSimulator {
             if res > 0 && (pfd.revents & POLLIN) != 0 {
                 loop {
                     let n = unsafe {
-                        libc::read(
-                            self.master_fd,
-                            buf.as_mut_ptr() as *mut c_void,
-                            buf.len(),
-                        )
+                        libc::read(self.master_fd, buf.as_mut_ptr() as *mut c_void, buf.len())
                     };
                     if n > 0 {
                         let slice = &buf[..n as usize];
@@ -263,8 +256,7 @@ fn e2e_outer_pty_interactive_input_status_bar_ipc_and_clean_exit() {
     assert!(
         term.pump_until(Duration::from_secs(2), |screen| {
             let contents = screen.contents();
-            !contents.contains("✓ SECOND_TOAST")
-                && !contents.contains("Deploying ━━━━━───── 50%")
+            !contents.contains("✓ SECOND_TOAST") && !contents.contains("Deploying ━━━━━───── 50%")
         }),
         "Zen Mode failed to hide HUD overlays; screen:\n{}",
         term.vt.screen().contents()

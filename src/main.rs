@@ -97,7 +97,10 @@ fn try_main() -> Result<(), SessionError> {
         Some("init-config") => {
             let (output_path, force) = parse_init_config_flags(&args[1..]);
             let written_path = Config::write_default_file(output_path, force)?;
-            println!("Wrote annotated default config to {}", written_path.display());
+            println!(
+                "Wrote annotated default config to {}",
+                written_path.display()
+            );
             Ok(())
         }
         Some("print-default-config") => {
