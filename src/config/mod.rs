@@ -137,6 +137,8 @@ pub enum WidgetKind {
         #[serde(default = "default_sparkline_width")]
         width: usize,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        label: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         cmd: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         interval_ms: Option<u64>,

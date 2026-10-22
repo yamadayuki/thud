@@ -344,11 +344,14 @@ impl TelemetryStore {
         });
 
         match &spec.kind {
-            WidgetKind::Sparkline { key, width, .. } => {
+            WidgetKind::Sparkline {
+                key, width, label, ..
+            } => {
                 let Some(series) = self.metrics.get(key) else {
                     return Vec::new();
                 };
-                let line = Sparkline::new(&series.history, *width, seg_style)
+                let effective_label = series.label.as_deref().or(label.as_deref());
+                let line = Sparkline::new(&series.history, *width, effective_label, seg_style)
                     .to_line()
                     .decorate_segment(icon, padding, pill, prefix, suffix, seg_style, outer_bg);
                 if line.is_empty() {

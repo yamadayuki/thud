@@ -133,7 +133,7 @@ impl Config {
              #      -> Event-driven `sh -c` command (`trigger = \"change\" | \"cwd\" | \"interval\"`, optional `when_files` filter)\n\
              #   7. { type = \"ipc_slot\", key = \"status\" }\n\
              #      -> Dynamic slot updated via `thud set status \"BUILDING...\" --ttl-ms 5000`\n\
-             #   8. { type = \"sparkline\", key = \"cpu\", width = 8 }\n\
+             #   8. { type = \"sparkline\", key = \"cpu\", width = 8, label = \"CPU\" }\n\
              #      -> Historical mini-graph (`▁▂▃▄▅▆▇█`); built-in keys: \"cpu\", \"battery\", or custom via `cmd` / `thud progress`\n\
              #   9. { type = \"gauge\", key = \"battery\", width = 6 }\n\
              #      -> Progress/metric bar (`━━━━── 85%`); built-in keys: \"battery\", \"cpu\", or custom via `cmd` / `thud progress`\n",

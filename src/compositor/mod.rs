@@ -808,7 +808,7 @@ mod tests {
             separator = " "
             left = []
             right = [
-                { type = "sparkline", key = "cpu", width = 8, icon = "CPU", padding = true },
+                { type = "sparkline", key = "cpu", width = 8, label = "CPU", padding = true },
                 { type = "gauge", key = "battery", width = 4, pill = true }
             ]
             overlays = []

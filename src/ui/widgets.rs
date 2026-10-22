@@ -242,14 +242,21 @@ impl<'a> Gauge<'a> {
 pub struct Sparkline<'a> {
     pub history: &'a VecDeque<u8>,
     pub width: usize,
+    pub label: Option<&'a str>,
     pub style: CellStyle,
 }
 
 impl<'a> Sparkline<'a> {
-    pub fn new(history: &'a VecDeque<u8>, width: usize, style: CellStyle) -> Self {
+    pub fn new(
+        history: &'a VecDeque<u8>,
+        width: usize,
+        label: Option<&'a str>,
+        style: CellStyle,
+    ) -> Self {
         Self {
             history,
             width,
+            label,
             style,
         }
     }
@@ -268,7 +275,15 @@ impl<'a> Sparkline<'a> {
             let idx = (usize::from(val.min(100)) * 7) / 100;
             out.push(SPARK_BLOCKS[idx]);
         }
-        Line::styled(out, self.style)
+        let label_style = self.style.with_bold(true);
+        let mut spans = Vec::with_capacity(2);
+        if let Some(lbl) = self.label
+            && !lbl.is_empty()
+        {
+            spans.push(Span::styled(format!("{lbl} "), label_style));
+        }
+        spans.push(Span::styled(out, self.style));
+        Line::new(spans)
     }
 }
 
