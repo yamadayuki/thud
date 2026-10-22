@@ -26,12 +26,17 @@ impl OuterTerminalSimulator {
             ws_ypixel: 0,
         };
 
+        #[cfg(target_os = "macos")]
+        let winp = &mut ws;
+        #[cfg(not(target_os = "macos"))]
+        let winp = &ws;
+
         let pid = unsafe {
             libc::forkpty(
                 &mut master_fd,
                 std::ptr::null_mut(),
                 std::ptr::null_mut(),
-                &mut ws,
+                winp,
             )
         };
         if pid < 0 {
