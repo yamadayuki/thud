@@ -1,0 +1,61 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache Cargo dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Install okf CLI
+        run: |
+          if [ "${{ runner.os }}" = "Linux" ]; then
+            curl -fsSL -o /tmp/okf https://github.com/okf-memory/okf-agent-memory/releases/latest/download/okf-linux-amd64
+          elif [ "${{ runner.os }}" = "macOS" ]; then
+            curl -fsSL -o /tmp/okf https://github.com/okf-memory/okf-agent-memory/releases/latest/download/okf-darwin-arm64
+          fi
+          chmod +x /tmp/okf
+          sudo mv /tmp/okf /usr/local/bin/okf
+          okf version
+
+      - name: Validate OKF documentation
+        run: okf validate docs --strict --drift
+
+      - name: Check code formatting
+        run: cargo fmt --check
+
+      - name: Run clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Run test suite
+        run: cargo test --verbose

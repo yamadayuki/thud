@@ -45,6 +45,8 @@ impl OuterTerminalSimulator {
                 // and allow running `cargo test` from inside a live `thud` session.
                 std::env::set_var("THUD_CONFIG", "/tmp/thud-e2e-nonexistent-default.toml");
                 std::env::remove_var("THUD_ACTIVE");
+                std::env::remove_var("THUD_SOCKET");
+                std::env::remove_var("THUD_TTY");
             }
             let c_bin = CString::new(bin_path).unwrap();
             let mut c_args: Vec<CString> = Vec::with_capacity(args.len() + 1);
