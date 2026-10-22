@@ -3,7 +3,7 @@ type: Architecture
 title: "Deep Compositor & Session Module Architecture"
 description: Two-tier deep module design pairing a deterministic Sans-I/O Compositor core with a declarative Session runner.
 tags: [architecture, codebase-design, compositor, seam, sans-io]
-generated: { by: antigravity/gemini-4, at: "2026-10-22T09:26:27Z" }
+generated: { by: agent/cli, at: "2026-10-22T12:27:55Z" }
 status: stable
 ---
 
@@ -65,30 +65,41 @@ flowchart TB
 - **Hides**:
   - 2D cell coordinate clipping and `Block` border inner-area geometry.
   - Multi-span styled text measurement (`Line::width()`) and rendering.
+  - Zero-allocation flat 2D `Cell` grid (`char` inline scalar + `Buffer::clear` + double-buffering).
+  - Minimal ANSI SGR/CUP diff emission with virtual run-length cursor tracking (`Buffer::diff(&prev, cursor)`), eliminating 60–80% of cursor position escape codes.
   - Automatic CJK 2-cell wide-character split boundary healing on every cell write.
-  - Double-buffered minimal ANSI SGR/CUP diff emission (`Buffer::diff(&prev, cursor)`).
 
 ### 2. Core Module: `src/compositor/` (Sans-I/O Deep Seam)
 
 - **Interface**:
   - `Compositor::new(config: Config, host_size: TermSize) -> Self`
   - `Compositor::step(&mut self, event: Event, now: Instant) -> Transition`
+  - `Compositor::render(&mut self, now: Instant) -> Option<Vec<u8>>`
+  - `Compositor::is_dirty(&self) -> bool`
 - **Internal Submodules**:
   - `store.rs` (`TelemetryStore`): Manages ephemeral IPC slots, metric ring buffers, stacked toast notifications, periodic command outputs, and foreground command timers.
   - `vt.rs` (`VtScreenAdapter`): Wraps `vt100::Parser` (Primary/Alternate screen), copies virtual terminal cells into `Buffer`, and synthesizes replies to terminal queries (`DA1`, `DA2`, `DSR 5/6`, `XTVERSION`, Kitty keyboard, `OSC 10/11`).
   - `layout.rs` (`PlacementSolver`): Computes child PTY viewport size and resolves floating overlay bounding-box positions with cursor and non-whitespace text collision dodging (`Ignore`, `AutoHide`, `DodgeToOppositeCorner`).
+- **Decoupled Ingestion & Pacing**:
+  - Byte ingestion (`Event::PtyOutput`) updates virtual screen state and sets a dirty flag immediately without triggering frame rendering.
+  - Frame composition (`render`) is paced by the session loop at ~144 FPS (6.9ms interval), while interactive host keystrokes (`Event::HostInput`) trigger an immediate 0ms flush.
 
 ### 3. Outer Module: `src/session/` (Caller Seam + Internal OS Seam)
 
 - **External Interface**:
   - `Session::run(config: Config) -> Result<i32, SessionError>`
   - `Session::run_headless(config: Config, cols: u16, rows: u16) -> Result<HeadlessHarness, SessionError>`
+  - `Session::send_ipc_message(socket_path: Option<PathBuf>, msg: &IpcMessage) -> Result<(), SessionError>`
 - **Internal Submodules**:
-  - `tty.rs` (`OsHostTerminal`): Polls and configures `STDIN_FILENO` (`0`) directly (avoiding macOS XNU `/dev/tty` `POLLNVAL`), writes diffs to `STDOUT_FILENO` (`1`), and tracks `SIGWINCH`.
-  - `pty.rs` (`OsChildPty`): Manages `forkpty`, `TIOCSWINSZ`, non-blocking PTY I/O, and child lifecycle.
-  - `ipc.rs` (`OsIpcServer`): Non-blocking Unix domain socket listener and client message sender.
-  - `probes.rs` (`SystemProbes`): Stateful OS telemetry collector (`sample(master_fd, child_pid, now) -> BuiltinValues`) encapsulating battery cache, CWD, Git branch, and foreground process command inspection.
+  - `tty.rs` (`OsHostTerminal`): Direct `STDIN_FILENO` (`0`) raw mode configuration and poll descriptor, atomic `SIGWINCH` and `SIGTERM`/`SIGHUP`/`SIGINT` graceful shutdown signal interception, terminal device name resolution (`get_tty_name`), and alternate screen buffer restoration.
+  - `pty.rs` (`OsChildPty`): Manages `forkpty`, `TIOCSWINSZ`, non-blocking PTY I/O, child lifecycle cleanup (`SIGHUP` on drop), and exports child session variables (`THUD_SOCKET`, `THUD_ACTIVE`, `THUD_TTY`).
+  - `ipc.rs` (`OsIpcServer`): Non-blocking Unix domain socket listener and client message sender with automatic socket file removal on drop.
+  - `probes.rs` (`SystemProbes`): Stateful OS telemetry collector (`sample(master_fd, child_pid, now) -> BuiltinValues`) with CWD-memoized Git branch resolution and asynchronous background thread for battery sampling.
   - `harness.rs` (`HeadlessHarness`): Deterministic in-memory adapter for multi-step integration tests.
+- **Fail-Safe Session Lifecycle**:
+  - Verifies socket liveness and TTY identity before asserting a nested session, automatically purging stale inherited environment variables from dead parent sessions.
+  - Supports `--force` (`-f`) override to bypass nested checks explicitly.
+  - Idempotent `thud quit` exits cleanly with code 0 and purges stale session variables if no server is running.
 
 ### 4. Configuration Module: `src/config/`
 

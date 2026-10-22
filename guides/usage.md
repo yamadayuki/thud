@@ -17,12 +17,21 @@ thud
 thud --shell /opt/homebrew/bin/fish --config ~/.config/thud/config.toml
 ```
 
-### Nested Session Protection
-`thud` automatically exports `THUD_ACTIVE=1` and `THUD_SOCKET=/tmp/thud-<pid>.sock` inside the child shell.
-If you accidentally run `thud` (or `thud run`) inside an already active `thud` session, it refuses to nest and prints:
-```text
-thud error: already inside an active thud session (PID ...). Nested thud sessions are not permitted.
-```
+### Nested Session Protection & Fail-Safe Auto-Healing
+`thud` automatically exports `THUD_ACTIVE=1`, `THUD_SOCKET=/tmp/thud-<pid>.sock`, and `THUD_TTY=<device>` inside the child shell.
+
+- **Socket Liveness Verification**: `thud` verifies that `$THUD_SOCKET` is genuinely reachable before asserting a nested session. If a previous session terminated abnormally or was killed externally, `thud` automatically cleans up the dead socket, purges the stale environment variables, and launches normally.
+- **TTY Differentiation**: If a new terminal window or VS Code integrated terminal inherits `$THUD_ACTIVE` from a parent environment, `thud` compares the current terminal's TTY against `$THUD_TTY`. If they differ, the inherited variables are cleared and `thud` starts without blocking.
+- **Explicit Override (`--force` / `-f`)**: If you ever want to bypass nested session checks explicitly, run:
+  ```sh
+  thud --force
+  # or
+  thud -f
+  ```
+- **Nested Session Prevention**: If you run `thud` directly inside an active session on the exact same TTY where the socket is alive, it blocks recursion:
+  ```text
+  thud error: cannot start a nested thud session inside an active thud session (use 'thud --force' to override, or 'exit' to leave)
+  ```
 Other CLI subcommands (`thud set`, `thud progress`, `thud toast`, `thud reload`, `thud quit`, `thud init-config`) work normally inside the session.
 
 ---
@@ -111,6 +120,7 @@ You can exit normally by typing `exit` / pressing `Ctrl+D` in your shell, or ter
 ```sh
 thud quit
 ```
+`thud quit` is fully **idempotent**: if no active session is running (or if a dead session left behind stale environment variables), it cleans up the environment, outputs `No active thud session is running. Cleaned up environment.`, and exits cleanly with exit code `0`.
 
 ---
 
@@ -122,6 +132,7 @@ Inside a running `thud` session, the following environment variables are availab
 | :--- | :--- |
 | `THUD_ACTIVE` | Set to `"1"` inside an active `thud` PTY session. |
 | `THUD_SOCKET` | Path to the active session's Unix domain socket (e.g., `/tmp/thud-12345.sock`). Used automatically by `thud set`, `thud progress`, `thud toast`, `thud reload`, and `thud quit`. |
+| `THUD_TTY` | TTY device path assigned to the child PTY session (e.g., `/dev/ttys002`). |
 | `THUD_CONFIG` | Path to the active `config.toml` file. |
 
 To send IPC commands from an **external** terminal window or background daemon that did not inherit `$THUD_SOCKET`, pass `--socket`:
