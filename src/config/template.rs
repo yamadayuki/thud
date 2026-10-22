@@ -78,9 +78,10 @@ impl Config {
         // [status_bar] section
         out.push_str(
             "\n# -----------------------------------------------------------------------------\n\
-             # Docked Bottom Status Bar (Vim-like status line)\n\
-             # Reserves `height` row(s) at the bottom of the terminal so child applications\n\
-             # (including fullscreen TUI apps like vim, htop, fzf, less) never overwrite it.\n\
+             # Docked Status Bar (Vim/tmux-like status line)\n\
+             # Reserves `height` row(s) at `position` (\"bottom\" or \"top\") of the terminal so\n\
+             # child applications (including fullscreen TUI apps like vim, htop, fzf, less)\n\
+             # never overwrite it.\n\
              #\n\
              # Colors (`fg`, `bg`, `border_fg`, `title_fg`, `track_fg`) accept:\n\
              #   - Transparency:   \"transparent\" (lets Ghostty/WezTerm/Kitty window opacity shine through)\n\
@@ -94,6 +95,11 @@ impl Config {
              [status_bar]\n",
         );
         let _ = writeln!(out, "enabled = {}", self.status_bar.enabled);
+        let _ = writeln!(
+            out,
+            "position = {}",
+            format_inline_value(&self.status_bar.position)
+        );
         let _ = writeln!(out, "height = {}", self.status_bar.height);
         let _ = writeln!(
             out,

@@ -1,38 +1,48 @@
-use crate::config::{CollisionPolicy, Config};
+use crate::config::{CollisionPolicy, Config, StatusBarPosition};
 use crate::ui::{Anchor, Buffer, Rect, TermSize};
 
 /// Pure geometric solver for child PTY viewport sizing and floating overlay collision avoidance.
 pub(crate) struct PlacementSolver;
 
 impl PlacementSolver {
-    /// Calculates the child PTY dimensions after reserving bottom rows for the docked status bar
+    /// Calculates the child PTY viewport rectangle inside the host terminal `Buffer` after reserving
+    /// top or bottom rows for the docked status bar (unless Zen Mode is active).
+    pub fn compute_child_rect(host_size: TermSize, config: &Config, zen_mode: bool) -> Rect {
+        let cols = host_size.cols.max(1);
+        let rows = host_size.rows.max(1);
+        if zen_mode {
+            return Rect::new(0, 0, cols, rows);
+        }
+        let reserved = config.reserved_status_rows();
+        if rows > reserved && reserved > 0 {
+            let child_rows = rows - reserved;
+            let top_y = match config.status_bar.position {
+                StatusBarPosition::Bottom => 0,
+                StatusBarPosition::Top => reserved,
+            };
+            Rect::new(0, top_y, cols, child_rows)
+        } else {
+            Rect::new(0, 0, cols, rows)
+        }
+    }
+
+    /// Calculates the child PTY dimensions after reserving rows for the docked status bar
     /// (unless Zen Mode is active).
     pub fn compute_child_size(host_size: TermSize, config: &Config, zen_mode: bool) -> TermSize {
-        if zen_mode {
-            return TermSize {
-                cols: host_size.cols.max(1),
-                rows: host_size.rows.max(1),
-            };
-        }
-        let reserved = config.reserved_bottom_rows();
-        let child_rows = if host_size.rows > reserved {
-            host_size.rows - reserved
-        } else {
-            1
-        };
+        let rect = Self::compute_child_rect(host_size, config, zen_mode);
         TermSize {
-            cols: host_size.cols.max(1),
-            rows: child_rows.max(1),
+            cols: rect.width,
+            rows: rect.height,
         }
     }
 
     /// Resolves the target `Rect` for a floating overlay of `(box_width, box_height)` within
-    /// `child_size`, applying `policy` (`Ignore`, `AutoHide`, `DodgeToOppositeCorner`) against
+    /// `child_rect`, applying `policy` (`Ignore`, `AutoHide`, `DodgeToOppositeCorner`) against
     /// the cursor and underlying cells in `buf`.
     #[allow(clippy::too_many_arguments)]
     pub fn resolve_overlay_rect(
         buf: &Buffer,
-        child_size: TermSize,
+        child_rect: Rect,
         anchor: Anchor,
         offset_x: i16,
         offset_y: i16,
@@ -42,20 +52,14 @@ impl PlacementSolver {
     ) -> Option<Rect> {
         if box_width == 0
             || box_height == 0
-            || box_width > child_size.cols
-            || box_height > child_size.rows
+            || box_width > child_rect.width
+            || box_height > child_rect.height
         {
             return None;
         }
 
         let (mut row, mut col) = Self::resolve_box_anchor(
-            anchor,
-            box_width,
-            box_height,
-            child_size.cols,
-            child_size.rows,
-            offset_x,
-            offset_y,
+            anchor, box_width, box_height, child_rect, offset_x, offset_y,
         );
 
         match policy {
@@ -72,19 +76,13 @@ impl PlacementSolver {
                     let mut candidates = Vec::new();
                     let opposite = anchor.opposite_horizontal();
                     candidates.push(Self::resolve_box_anchor(
-                        opposite,
-                        box_width,
-                        box_height,
-                        child_size.cols,
-                        child_size.rows,
-                        -offset_x,
-                        offset_y,
+                        opposite, box_width, box_height, child_rect, -offset_x, offset_y,
                     ));
-                    for r in (row + 1)..=child_size.rows.saturating_sub(box_height) {
+                    for r in (row + 1)..=child_rect.bottom().saturating_sub(box_height) {
                         candidates.push((r, col));
                     }
-                    if row > 0 {
-                        for r in (0..row).rev() {
+                    if row > child_rect.y {
+                        for r in (child_rect.y..row).rev() {
                             candidates.push((r, col));
                         }
                     }
@@ -102,13 +100,7 @@ impl PlacementSolver {
                         return None;
                     } else {
                         let (dodged_row, dodged_col) = Self::resolve_box_anchor(
-                            opposite,
-                            box_width,
-                            box_height,
-                            child_size.cols,
-                            child_size.rows,
-                            -offset_x,
-                            offset_y,
+                            opposite, box_width, box_height, child_rect, -offset_x, offset_y,
                         );
                         row = dodged_row;
                         col = dodged_col;
@@ -124,27 +116,33 @@ impl PlacementSolver {
         anchor: Anchor,
         width: u16,
         height: u16,
-        cols: u16,
-        rows: u16,
+        child_rect: Rect,
         offset_x: i16,
         offset_y: i16,
     ) -> (u16, u16) {
         let base_row: i32 = match anchor {
-            Anchor::TopLeft | Anchor::TopCenter | Anchor::TopRight => 0,
+            Anchor::TopLeft | Anchor::TopCenter | Anchor::TopRight => i32::from(child_rect.y),
             Anchor::BottomLeft | Anchor::BottomCenter | Anchor::BottomRight => {
-                i32::from(rows.saturating_sub(height))
+                i32::from(child_rect.bottom().saturating_sub(height))
             }
         };
         let base_col: i32 = match anchor {
-            Anchor::TopLeft | Anchor::BottomLeft => 0,
-            Anchor::TopCenter | Anchor::BottomCenter => i32::from(cols.saturating_sub(width) / 2),
-            Anchor::TopRight | Anchor::BottomRight => i32::from(cols.saturating_sub(width)),
+            Anchor::TopLeft | Anchor::BottomLeft => i32::from(child_rect.x),
+            Anchor::TopCenter | Anchor::BottomCenter => {
+                i32::from(child_rect.x + child_rect.width.saturating_sub(width) / 2)
+            }
+            Anchor::TopRight | Anchor::BottomRight => {
+                i32::from(child_rect.right().saturating_sub(width))
+            }
         };
 
-        let r = (base_row + i32::from(offset_y)).clamp(0, i32::from(rows.saturating_sub(height)))
-            as u16;
-        let c =
-            (base_col + i32::from(offset_x)).clamp(0, i32::from(cols.saturating_sub(width))) as u16;
+        let min_row = i32::from(child_rect.y);
+        let max_row = i32::from(child_rect.bottom().saturating_sub(height)).max(min_row);
+        let min_col = i32::from(child_rect.x);
+        let max_col = i32::from(child_rect.right().saturating_sub(width)).max(min_col);
+
+        let r = (base_row + i32::from(offset_y)).clamp(min_row, max_row) as u16;
+        let c = (base_col + i32::from(offset_x)).clamp(min_col, max_col) as u16;
         (r, c)
     }
 

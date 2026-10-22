@@ -1,4 +1,4 @@
-use crate::ui::{Buffer, CellStyle, Color, CursorState, TermSize};
+use crate::ui::{Buffer, CellStyle, Color, CursorState, Rect};
 
 /// Internal adapter wrapping `vt100::Parser` (dual Primary/Alternate screen state machine),
 /// terminal capability query responder (`DA1`, `DA2`, `DSR`, `XTVERSION`, Kitty keyboard, `OSC 10/11`),
@@ -29,13 +29,12 @@ impl VtScreenAdapter {
         self.respond_to_terminal_queries(bytes)
     }
 
-    /// Projects the current virtual terminal screen cells and cursor state into the top
-    /// `child_size` area of `buf`.
-    pub fn paint_into_buffer(&self, child_size: TermSize, buf: &mut Buffer) {
+    /// Projects the current virtual terminal screen cells and cursor state into `child_rect` of `buf`.
+    pub fn paint_into_buffer(&self, child_rect: Rect, buf: &mut Buffer) {
         let screen = self.vt.screen();
-        for r in 0..child_size.rows {
+        for r in 0..child_rect.height {
             let mut c = 0;
-            while c < child_size.cols {
+            while c < child_rect.width {
                 if let Some(cell) = screen.cell(r, c) {
                     let style = Self::convert_vt_style(cell);
                     if cell.is_wide_continuation() {
@@ -45,7 +44,7 @@ impl VtScreenAdapter {
                     let contents = cell.contents();
                     let ch = contents.chars().next().unwrap_or(' ');
                     let width = if cell.is_wide() { 2 } else { 1 };
-                    buf.set_char(r, c, ch, width, style);
+                    buf.set_char(child_rect.y + r, child_rect.x + c, ch, width, style);
                     c += u16::from(width);
                 } else {
                     c += 1;
@@ -55,8 +54,8 @@ impl VtScreenAdapter {
 
         let (cur_row, cur_col) = screen.cursor_position();
         buf.cursor = CursorState {
-            row: cur_row.min(child_size.rows.saturating_sub(1)),
-            col: cur_col.min(child_size.cols.saturating_sub(1)),
+            row: child_rect.y + cur_row.min(child_rect.height.saturating_sub(1)),
+            col: child_rect.x + cur_col.min(child_rect.width.saturating_sub(1)),
             hidden: screen.hide_cursor(),
         };
     }

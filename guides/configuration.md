@@ -115,11 +115,12 @@ git_bg = "#bb9af7@70%"
 
 ## 5. Docked Status Bar (`[status_bar]`)
 
-The status bar docks to the bottom of the terminal and resizes the child PTY height (`rows - status_bar.height`) so shells and full-screen TUI apps (`vim`, `nvim`, `less`, `fzf`) never get covered by the bar.
+The status bar docks to the bottom or top of the terminal and resizes the child PTY height (`rows - status_bar.height`) so shells and full-screen TUI apps (`vim`, `nvim`, `less`, `fzf`) never get covered by the bar.
 
 ```toml
 [status_bar]
 enabled = true
+position = "bottom"    # "bottom" | "top"
 height = 1
 separator = ""
 fg = "#c0caf5"         # optional override for theme.bar_fg
@@ -131,8 +132,9 @@ right = [ ... ]
 
 | Key | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
-| `enabled` | `bool` | `true` | Enable or disable the bottom docked status bar. |
-| `height` | `u16` | `1` | Number of terminal rows reserved at the bottom (`1` recommended). |
+| `enabled` | `bool` | `true` | Enable or disable the docked status bar. |
+| `position` | `String` | `"bottom"` | Vertical dock position: `"bottom"` or `"top"`. When set to `"top"`, the child terminal viewport shifts down by `height` rows and floating overlays/toasts automatically position inside the child viewport below the top bar. |
+| `height` | `u16` | `1` | Number of terminal rows reserved for the status bar (`1` recommended). |
 | `separator` | `String` | `""` | String inserted between adjacent visible widgets in the same alignment group (e.g., `""`, `" "`, or `" \| "`). |
 | `fg` | `Color` (optional) | `theme.bar_fg` | Default foreground color for the status bar. |
 | `bg` | `Color` (optional) | `theme.bar_bg` | Background fill color for empty cells on the status bar. |

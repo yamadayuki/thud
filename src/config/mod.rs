@@ -191,11 +191,22 @@ fn default_gauge_width() -> usize {
     10
 }
 
-/// Docked bottom status line configuration (Vim-like status bar).
+/// Vertical dock position for `[status_bar]`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StatusBarPosition {
+    #[default]
+    Bottom,
+    Top,
+}
+
+/// Docked status line configuration (Vim/tmux-like top or bottom status bar).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StatusBarConfig {
     #[serde(default = "default_true")]
     pub enabled: bool,
+    #[serde(default)]
+    pub position: StatusBarPosition,
     #[serde(default = "default_status_height")]
     pub height: u16,
     #[serde(default = "default_separator")]
@@ -237,6 +248,7 @@ impl Default for StatusBarConfig {
         };
         Self {
             enabled: true,
+            position: StatusBarPosition::Bottom,
             height: 1,
             separator: default_separator(),
             fg: None,
@@ -559,8 +571,8 @@ impl Config {
         }
     }
 
-    /// Reserved bottom rows for the docked status bar.
-    pub fn reserved_bottom_rows(&self) -> u16 {
+    /// Reserved rows (`top` or `bottom`) for the docked status bar.
+    pub fn reserved_status_rows(&self) -> u16 {
         if self.status_bar.enabled {
             self.status_bar.height
         } else {
@@ -576,7 +588,8 @@ mod tests {
     #[test]
     fn default_config_includes_bottom_status_bar_and_top_right_clock() {
         let cfg = Config::default();
-        assert_eq!(cfg.reserved_bottom_rows(), 1);
+        assert_eq!(cfg.reserved_status_rows(), 1);
+        assert_eq!(cfg.status_bar.position, StatusBarPosition::Bottom);
         assert_eq!(cfg.overlays.len(), 1);
         assert_eq!(cfg.overlays[0].id, "clock");
         assert_eq!(cfg.overlays[0].anchor, Anchor::TopRight);

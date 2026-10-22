@@ -6,7 +6,8 @@ use crate::compositor::layout::PlacementSolver;
 use crate::compositor::store::TelemetryStore;
 use crate::compositor::vt::VtScreenAdapter;
 use crate::config::{
-    Anchor, Color, Config, ConfigError, IpcMessage, OverlayConfig, ScreenCondition, TermSize,
+    Anchor, Color, Config, ConfigError, IpcMessage, OverlayConfig, ScreenCondition,
+    StatusBarPosition, TermSize,
 };
 use crate::ui::{Block, Buffer, CellStyle, Gauge, Line, Rect, StatusBar, Toast, Widget};
 use chrono::{DateTime, Local};
@@ -226,20 +227,24 @@ impl Compositor {
 
     fn build_buffer(&self, now: Instant) -> Buffer {
         let mut buf = Buffer::new(self.host_size.cols, self.host_size.rows);
-        let child_size = self.child_size();
+        let child_rect =
+            PlacementSolver::compute_child_rect(self.host_size, &self.config, self.zen_mode);
         let palette = self.config.theme.palette();
 
         // 1. Project child virtual terminal screen cells & cursor into `buf`
-        self.vt.paint_into_buffer(child_size, &mut buf);
+        self.vt.paint_into_buffer(child_rect, &mut buf);
 
         if self.zen_mode {
             return buf;
         }
 
-        // 2. Render docked bottom status bar if enabled and terminal is tall enough
-        let reserved = self.config.reserved_bottom_rows();
+        // 2. Render docked top or bottom status bar if enabled and terminal is tall enough
+        let reserved = self.config.reserved_status_rows();
         if self.config.status_bar.enabled && self.host_size.rows > reserved && reserved > 0 {
-            let status_row = self.host_size.rows - reserved;
+            let status_row = match self.config.status_bar.position {
+                StatusBarPosition::Bottom => self.host_size.rows - reserved,
+                StatusBarPosition::Top => 0,
+            };
             let bar_style = CellStyle::new(
                 self.config.status_bar.fg.unwrap_or(palette.bar_fg),
                 self.config.status_bar.bg.unwrap_or(palette.bar_bg),
@@ -286,11 +291,11 @@ impl Compositor {
 
         let is_alt = self.vt.is_alternate_screen();
         for ov in overlays {
-            self.render_overlay(&mut buf, ov, child_size, is_alt, now);
+            self.render_overlay(&mut buf, ov, child_rect, is_alt, now);
         }
 
         // 4. Render stacked toast notifications and unreferenced progress gauges
-        self.render_toast_stack(&mut buf, child_size);
+        self.render_toast_stack(&mut buf, child_rect);
 
         buf
     }
@@ -299,7 +304,7 @@ impl Compositor {
         &self,
         buf: &mut Buffer,
         ov: &OverlayConfig,
-        child_size: TermSize,
+        child_rect: Rect,
         is_alt: bool,
         now: Instant,
     ) {
@@ -337,7 +342,7 @@ impl Compositor {
 
         let Some(rect) = PlacementSolver::resolve_overlay_rect(
             buf,
-            child_size,
+            child_rect,
             ov.anchor,
             ov.offset_x,
             ov.offset_y,
@@ -351,7 +356,7 @@ impl Compositor {
         block.render(rect, buf);
     }
 
-    fn render_toast_stack(&self, buf: &mut Buffer, child_size: TermSize) {
+    fn render_toast_stack(&self, buf: &mut Buffer, child_rect: Rect) {
         let mut items: Vec<(Line, CellStyle)> = Vec::new();
 
         // 1. Collect any active unreferenced IPC progress metrics (`thud progress <key> <pct>`)
@@ -390,9 +395,9 @@ impl Compositor {
             Anchor::TopRight | Anchor::TopLeft | Anchor::TopCenter
         );
         let mut current_row = if is_top {
-            i32::from(toast_cfg.margin_y)
+            i32::from(child_rect.y) + i32::from(toast_cfg.margin_y)
         } else {
-            i32::from(child_size.rows) - 1 - i32::from(toast_cfg.margin_y)
+            i32::from(child_rect.bottom()) - 1 - i32::from(toast_cfg.margin_y)
         };
 
         for (mut line, style) in items {
@@ -402,7 +407,7 @@ impl Compositor {
 
             let block = Block::new(toast_cfg.border, None, style, vec![line]);
             let (box_w, box_h) = block.measure();
-            if box_w == 0 || box_h == 0 || box_w > child_size.cols {
+            if box_w == 0 || box_h == 0 || box_w > child_rect.width {
                 continue;
             }
 
@@ -411,19 +416,20 @@ impl Compositor {
             } else {
                 current_row - i32::from(box_h) + 1
             };
-            if top_row < 0 || top_row + i32::from(box_h) > i32::from(child_size.rows) {
+            if top_row < i32::from(child_rect.y)
+                || top_row + i32::from(box_h) > i32::from(child_rect.bottom())
+            {
                 break;
             }
 
             let col = match toast_cfg.anchor {
-                Anchor::TopRight | Anchor::BottomRight => child_size
-                    .cols
+                Anchor::TopRight | Anchor::BottomRight => child_rect
+                    .right()
                     .saturating_sub(box_w.saturating_add(toast_cfg.margin_x)),
-                Anchor::TopLeft | Anchor::BottomLeft => toast_cfg
-                    .margin_x
-                    .min(child_size.cols.saturating_sub(box_w)),
+                Anchor::TopLeft | Anchor::BottomLeft => (child_rect.x + toast_cfg.margin_x)
+                    .min(child_rect.right().saturating_sub(box_w)),
                 Anchor::TopCenter | Anchor::BottomCenter => {
-                    child_size.cols.saturating_sub(box_w) / 2
+                    child_rect.x + child_rect.width.saturating_sub(box_w) / 2
                 }
             };
 
@@ -955,17 +961,20 @@ mod tests {
         assert_eq!(tx.child_pty_input, b"xy");
         assert!(tx.reload_config);
 
-        // Applying Event::ReloadConfig swaps active configuration and re-renders immediately
+        // Applying Event::ReloadConfig swaps active configuration (including `position = "top"`)
         let updated_cfg = Config::from_toml(
             r#"
+            overlays = []
+
             [status_bar]
+            position = "top"
             separator = " | "
             left = [{ type = "ipc_slot", key = "msg" }]
             right = []
-            overlays = []
         "#,
         )
         .unwrap();
+        comp.step(Event::PtyOutput(b"shell-line"), now);
         comp.step(
             Event::Ipc(IpcMessage::SetSlot {
                 key: "msg".to_string(),
@@ -975,7 +984,9 @@ mod tests {
             now,
         );
         comp.step(Event::ReloadConfig(updated_cfg), now);
-        let last_line = comp.rendered_text().lines().last().unwrap().to_string();
-        assert!(last_line.contains("RELOADED"));
+        let rendered = comp.rendered_text();
+        let lines: Vec<&str> = rendered.lines().collect();
+        assert!(lines[0].contains("RELOADED"));
+        assert!(lines[1].starts_with("shell-line"));
     }
 }

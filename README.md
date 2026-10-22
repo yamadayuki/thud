@@ -147,6 +147,7 @@ reload_key = "ctrl-]"
 
 [status_bar]
 enabled = true
+position = "bottom"
 height = 1
 separator = ""
 
