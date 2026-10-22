@@ -3,7 +3,7 @@ type: Architecture
 title: "Deep Compositor & Session Module Architecture"
 description: Two-tier deep module design pairing a deterministic Sans-I/O Compositor core with a declarative Session runner.
 tags: [architecture, codebase-design, compositor, seam, sans-io]
-generated: { by: claude-code/claude-opus-5-5, at: "2026-10-22T22:31:02Z" }
+generated: { by: claude-code/claude-opus-5-5, at: "2026-10-22T22:33:57Z" }
 status: stable
 ---
 
@@ -90,7 +90,7 @@ flowchart TB
 ### 3. Outer Module: `src/session/` (Caller Seam + Internal OS Seam)
 
 - **External Interface**:
-  - `Session::run(config: Config) -> Result<i32, SessionError>`
+  - `Session::run(config: Config, config_path: Option<PathBuf>) -> Result<i32, SessionError>`
   - `Session::send_ipc_message(socket_path: Option<PathBuf>, msg: &IpcMessage) -> Result<(), SessionError>`
 - **Session Loop (ADR-004)**:
   - `session_loop.rs` (`SessionLoop<Io: SessionIo>`): owns every runtime policy of a live session — 144 FPS pacing with immediate flush on host input, the dynamic wait timeout, `SIGWINCH` / `SIGTERM`, child exit, IPC and `Quit`, periodic command dispatch, the 250ms telemetry tick, and config reload with an `Error` toast on invalid config — driven one iteration at a time via `run_once()`.
@@ -98,13 +98,15 @@ flowchart TB
   - `memory_io.rs` (`MemorySessionIo`, test-only): queued inputs, a virtual clock advanced by `SessionLoop::advance`, and recorded host writes, child input, resizes, and spawned commands.
 - **OS Submodules**:
   - `tty.rs` (`OsHostTerminal`): Direct `STDIN_FILENO` (`0`) raw mode configuration and poll descriptor, atomic `SIGWINCH` and `SIGTERM`/`SIGHUP`/`SIGINT` graceful shutdown signal interception, terminal device name resolution (`get_tty_name`), and alternate screen buffer restoration.
-  - `pty.rs` (`OsChildPty`): Manages `forkpty`, `TIOCSWINSZ`, non-blocking PTY I/O, child lifecycle cleanup (`SIGHUP` on drop), and exports child session variables (`THUD_SOCKET`, `THUD_ACTIVE`, `THUD_TTY`).
+  - `pty.rs` (`OsChildPty`): Manages `forkpty`, `TIOCSWINSZ`, non-blocking PTY I/O, child lifecycle cleanup (`SIGHUP` on drop), and explicitly sets the child session variables (`THUD_SOCKET`, `THUD_ACTIVE`, `THUD_TTY`; `THUD_TTY` removed when the host TTY has no name).
+  - `inherited.rs` (`InheritedSession`, ADR-006): Reads the inherited `THUD_*` variables once and classifies the launch as `Fresh`, `OtherTerminal`, `Stale`, or `Nested` from the current TTY and a socket liveness probe, as a pure function. `remove_socket_file` deletes a path only if it is a Unix socket.
   - `ipc.rs` (`OsIpcServer`): Non-blocking Unix domain socket listener and client message sender with automatic socket file removal on drop.
   - `probes.rs` (`SystemProbes`): Stateful OS telemetry collector (`sample(master_fd, child_pid, now, watched_markers) -> BuiltinValues`) that re-resolves the Git branch and `when_files` markers only when the CWD changes or a foreground command finishes, plus an asynchronous background thread for battery sampling.
 - **Fail-Safe Session Lifecycle**:
-  - Verifies socket liveness and TTY identity before asserting a nested session, automatically purging stale inherited environment variables from dead parent sessions.
+  - Verifies socket liveness and TTY identity before asserting a nested session; a dead parent session's socket is removed and its variables are ignored. The thud process never mutates its own environment.
   - Supports `--force` (`-f`) override to bypass nested checks explicitly.
-  - Idempotent `thud quit` exits cleanly with code 0 and purges stale session variables if no server is running.
+  - The `--config` path is passed to `Session::run` as a value and read by `OsSessionIo` on live reload; `THUD_CONFIG` is never set by thud.
+  - Typed `SessionError::NoActiveSession` / `SessionError::Usage`; idempotent `thud quit` exits with code 0 when no session is reachable.
 
 ### 4. Configuration Module: `src/config/`
 

@@ -40,12 +40,14 @@ impl OsChildPty {
         }
 
         if pid == 0 {
-            // Child process: set THUD_SOCKET, THUD_ACTIVE, THUD_TTY and exec the user's shell
+            // Child process: describe this session through THUD_SOCKET, THUD_ACTIVE, and
+            // THUD_TTY (removed when the host TTY has no name) and exec the user's shell
             unsafe {
                 std::env::set_var("THUD_SOCKET", socket_path.as_os_str());
                 std::env::set_var("THUD_ACTIVE", "1");
-                if let Some(tty) = crate::session::tty::get_tty_name(libc::STDIN_FILENO) {
-                    std::env::set_var("THUD_TTY", tty);
+                match crate::session::tty::get_tty_name(libc::STDIN_FILENO) {
+                    Some(tty) => std::env::set_var("THUD_TTY", tty),
+                    None => std::env::remove_var("THUD_TTY"),
                 }
             }
             let c_shell = CString::new(shell).unwrap_or_else(|_| CString::new("/bin/sh").unwrap());
