@@ -233,22 +233,29 @@ impl Session {
         if !tx.host_ansi_diff.is_empty() {
             host.write_diff(&tx.host_ansi_diff)?;
         }
-        for (id, cmd) in &tx.due_commands {
-            let tx_clone = cmd_tx.clone();
-            let id_owned = id.clone();
-            let cmd_owned = cmd.clone();
-            thread::spawn(move || {
-                if let Ok(output) = Command::new("/bin/sh")
-                    .arg("-c")
-                    .arg(&cmd_owned)
-                    .stdin(Stdio::null())
-                    .stderr(Stdio::null())
-                    .output()
-                {
-                    let text = String::from_utf8_lossy(&output.stdout).to_string();
-                    let _ = tx_clone.send((id_owned, text));
-                }
-            });
+        if !tx.due_commands.is_empty() {
+            let pty_cwd = SystemProbes::resolve_pty_cwd(pty.master_fd, pty.child_pid);
+            for (id, cmd) in &tx.due_commands {
+                let tx_clone = cmd_tx.clone();
+                let id_owned = id.clone();
+                let cmd_owned = cmd.clone();
+                let cwd_owned = pty_cwd.clone();
+                thread::spawn(move || {
+                    let mut command = Command::new("/bin/sh");
+                    command
+                        .arg("-c")
+                        .arg(&cmd_owned)
+                        .stdin(Stdio::null())
+                        .stderr(Stdio::null());
+                    if let Some(dir) = cwd_owned {
+                        command.current_dir(dir);
+                    }
+                    if let Ok(output) = command.output() {
+                        let text = String::from_utf8_lossy(&output.stdout).to_string();
+                        let _ = tx_clone.send((id_owned, text));
+                    }
+                });
+            }
         }
         Ok(())
     }

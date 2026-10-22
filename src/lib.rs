@@ -5,9 +5,9 @@ pub mod ui;
 
 pub use compositor::{BuiltinValues, Compositor, Event, Transition};
 pub use config::{
-    Anchor, BorderStyle, CellStyle, CollisionPolicy, Color, Config, ConfigError, IpcMessage,
-    OverlayConfig, ScreenCondition, SegmentFormat, StatusBarConfig, TermSize, ThemePalette,
-    ThemePreset, ToastLevel, WidgetKind, WidgetSpec,
+    Anchor, BorderStyle, CellStyle, CollisionPolicy, Color, CommandTrigger, Config, ConfigError,
+    IpcMessage, OverlayConfig, ScreenCondition, SegmentFormat, StatusBarConfig, TermSize,
+    ThemePalette, ThemePreset, ToastLevel, WidgetKind, WidgetSpec,
 };
 pub use session::{HeadlessHarness, Session, SessionError};
 pub use ui::{

@@ -19,6 +19,15 @@ impl SystemProbes {
         Self::default()
     }
 
+    /// Resolves the raw working directory of the child PTY's foreground process group (falling back to the shell PID).
+    pub fn resolve_pty_cwd(pty_master_fd: libc::c_int, child_pid: libc::pid_t) -> Option<PathBuf> {
+        let fg_pid = unsafe {
+            let pgrp = libc::tcgetpgrp(pty_master_fd);
+            if pgrp > 0 { pgrp } else { child_pid }
+        };
+        read_process_cwd(fg_pid).or_else(|| read_process_cwd(child_pid))
+    }
+
     /// Samples the child PTY's foreground process group for CWD, Git branch, foreground command,
     /// cached battery status, and system CPU load percentage (`0..=100`).
     pub fn sample(

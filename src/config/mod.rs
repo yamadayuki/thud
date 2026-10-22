@@ -57,6 +57,18 @@ pub enum ScreenCondition {
     DashboardOnly,
 }
 
+/// Execution trigger policy for `type = "command"` widgets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CommandTrigger {
+    /// Execute on startup, whenever `cwd` changes, and whenever a foreground command finishes.
+    Change,
+    /// Execute on startup and whenever `cwd` changes.
+    Cwd,
+    /// Execute periodically every `interval_ms` milliseconds.
+    Interval,
+}
+
 /// Per-widget segment styling, icon, capsule (`pill` / `padding`), and affix options.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct SegmentFormat {
@@ -102,12 +114,18 @@ pub enum WidgetKind {
     },
     /// Static text label.
     Text { text: String },
-    /// Periodic shell command executed via `sh -c`.
+    /// Shell command executed via `sh -c` in the current working directory.
+    /// Defaults to `trigger = "change"` (runs on CWD change and command completion)
+    /// unless `interval_ms` is specified.
     Command {
         id: String,
         cmd: String,
-        #[serde(default = "default_command_interval_ms")]
-        interval_ms: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        trigger: Option<CommandTrigger>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        interval_ms: Option<u64>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        when_files: Vec<String>,
     },
     /// Named slot populated dynamically via IPC socket or builtin state map.
     IpcSlot { key: String },
@@ -163,10 +181,6 @@ impl From<WidgetKind> for WidgetSpec {
 
 fn default_clock_format() -> String {
     "%H:%M:%S".to_string()
-}
-
-fn default_command_interval_ms() -> u64 {
-    5000
 }
 
 fn default_sparkline_width() -> usize {

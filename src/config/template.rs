@@ -126,8 +126,8 @@ impl Config {
              #      -> Local time formatted with strftime syntax (default: \"%H:%M:%S\")\n\
              #   6. { type = \"text\", text = \"PROD\" }\n\
              #      -> Static label string\n\
-             #   7. { type = \"command\", id = \"k8s\", cmd = \"kubectl config current-context\", interval_ms = 5000 }\n\
-             #      -> Periodic non-blocking `sh -c` command output refreshed every `interval_ms`\n\
+             #   7. { type = \"command\", id = \"node\", cmd = \"node -v\", trigger = \"change\", when_files = [\"package.json\", \".nvmrc\"] }\n\
+             #      -> Event-driven `sh -c` command (`trigger = \"change\" | \"cwd\" | \"interval\"`, optional `when_files` filter)\n\
              #   8. { type = \"ipc_slot\", key = \"status\" }\n\
              #      -> Dynamic slot updated via `thud set status \"BUILDING...\" --ttl-ms 5000`\n\
              #   9. { type = \"sparkline\", key = \"cpu\", width = 8 }\n\

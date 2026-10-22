@@ -84,7 +84,7 @@ impl Compositor {
         let child_size = PlacementSolver::compute_child_size(initial_host_size, &config, false);
         let vt = VtScreenAdapter::new(child_size.cols, child_size.rows);
         let mut store = TelemetryStore::new();
-        let due_commands = store.collect_due_commands(&config, now);
+        let due_commands = store.collect_due_commands(&config, now, false, false);
 
         let mut comp = Self {
             host_size: initial_host_size,
@@ -786,5 +786,112 @@ mod tests {
         let rendered = comp.rendered_text();
         let last_line = rendered.lines().last().unwrap();
         assert!(last_line.contains(" CPU ▁▁▁▁▁▁▁▄ "));
+    }
+
+    #[test]
+    fn event_driven_command_runs_on_cwd_and_cmd_finish_and_respects_when_files() {
+        let now = Instant::now();
+        let cfg = Config::from_toml(
+            r#"
+            [status_bar]
+            separator = " | "
+            left = []
+            right = [
+                { type = "command", id = "rust", cmd = "rustc -V", trigger = "change", when_files = ["Cargo.toml"] }
+            ]
+            overlays = []
+        "#,
+        )
+        .unwrap();
+
+        let (mut comp, init_tx) =
+            Compositor::new(TermSize { cols: 30, rows: 3 }, cfg, now).unwrap();
+        // Before first tick, CWD is None and when_files is non-empty -> not due
+        assert!(init_tx.due_commands.is_empty());
+
+        let repo_dir = std::env::current_dir()
+            .unwrap()
+            .join("src")
+            .display()
+            .to_string();
+
+        // 1. Enter repository subdirectory (`src/` has ancestor `Cargo.toml`) -> due!
+        let tx1 = comp.step(
+            Event::Tick {
+                wall_clock: Local::now(),
+                builtins: BuiltinValues {
+                    cwd: Some(repo_dir.clone()),
+                    ..Default::default()
+                },
+            },
+            now,
+        );
+        assert_eq!(
+            tx1.due_commands,
+            vec![("rust".to_string(), "rustc -V".to_string())]
+        );
+        comp.step(
+            Event::CommandOutput {
+                id: "rust".to_string(),
+                output: "1.85.0".to_string(),
+            },
+            now,
+        );
+        assert!(comp.rendered_text().contains("1.85.0"));
+
+        // 2. Subsequent tick in same directory with no foreground command completion -> NOT due
+        let tx2 = comp.step(
+            Event::Tick {
+                wall_clock: Local::now(),
+                builtins: BuiltinValues {
+                    cwd: Some(repo_dir.clone()),
+                    ..Default::default()
+                },
+            },
+            now + Duration::from_secs(10),
+        );
+        assert!(tx2.due_commands.is_empty());
+
+        // 3. Foreground command starts and then finishes -> due again!
+        comp.step(
+            Event::Tick {
+                wall_clock: Local::now(),
+                builtins: BuiltinValues {
+                    cwd: Some(repo_dir.clone()),
+                    fg_process: Some("rustup".to_string()),
+                    ..Default::default()
+                },
+            },
+            now + Duration::from_secs(11),
+        );
+        let tx3 = comp.step(
+            Event::Tick {
+                wall_clock: Local::now(),
+                builtins: BuiltinValues {
+                    cwd: Some(repo_dir),
+                    fg_process: None,
+                    ..Default::default()
+                },
+            },
+            now + Duration::from_secs(12),
+        );
+        assert_eq!(
+            tx3.due_commands,
+            vec![("rust".to_string(), "rustc -V".to_string())]
+        );
+
+        // 4. Leave directory to `/` (no `Cargo.toml`) -> not due and cached output cleared immediately!
+        let tx4 = comp.step(
+            Event::Tick {
+                wall_clock: Local::now(),
+                builtins: BuiltinValues {
+                    cwd: Some("/".to_string()),
+                    ..Default::default()
+                },
+            },
+            now + Duration::from_secs(13),
+        );
+        assert!(tx4.due_commands.is_empty());
+        assert!(!comp.rendered_text().contains("1.85.0"));
     }
 }

@@ -1,8 +1,11 @@
 use crate::compositor::BuiltinValues;
-use crate::config::{Config, IpcMessage, OverlayConfig, ToastLevel, WidgetKind, WidgetSpec};
+use crate::config::{
+    CommandTrigger, Config, IpcMessage, OverlayConfig, ToastLevel, WidgetKind, WidgetSpec,
+};
 use crate::ui::{CellStyle, Color, Gauge, Line, Span, Sparkline, ThemePalette, ThemePreset};
 use chrono::{DateTime, Local};
 use std::collections::{BTreeMap, VecDeque};
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 const MAX_METRIC_HISTORY: usize = 64;
@@ -72,6 +75,9 @@ impl TelemetryStore {
         config: &Config,
         now: Instant,
     ) -> Vec<(String, String)> {
+        let cwd_changed = self.builtins.cwd != builtins.cwd && builtins.cwd.is_some();
+        let cmd_finished = self.builtins.fg_process.is_some() && builtins.fg_process.is_none();
+
         self.wall_clock = wall_clock;
         self.update_fg_telemetry(&builtins.fg_process, now);
         if let Some(cpu) = builtins.cpu_usage {
@@ -79,7 +85,7 @@ impl TelemetryStore {
         }
         self.builtins = builtins;
         self.evict_expired(now);
-        self.collect_due_commands(config, now)
+        self.collect_due_commands(config, now, cwd_changed, cmd_finished)
     }
 
     pub fn on_command_output(&mut self, id: String, output: &str) {
@@ -178,7 +184,13 @@ impl TelemetryStore {
         }
     }
 
-    pub fn collect_due_commands(&mut self, config: &Config, now: Instant) -> Vec<(String, String)> {
+    pub fn collect_due_commands(
+        &mut self,
+        config: &Config,
+        now: Instant,
+        cwd_changed: bool,
+        cmd_finished: bool,
+    ) -> Vec<(String, String)> {
         let mut specs = Vec::new();
         for w in &config.status_bar.left {
             specs.push(&w.kind);
@@ -200,19 +212,45 @@ impl TelemetryStore {
             }
         }
 
+        let current_cwd = self.builtins.cwd.as_deref();
         let mut due = Vec::new();
         for kind in specs {
             match kind {
                 WidgetKind::Command {
                     id,
                     cmd,
+                    trigger,
                     interval_ms,
+                    when_files,
                 } => {
-                    let interval = Duration::from_millis(*interval_ms);
-                    let is_due = match self.command_last_run.get(id) {
-                        None => true,
-                        Some(&last) => now.saturating_duration_since(last) >= interval,
+                    if !matches_when_files(current_cwd, when_files) {
+                        self.command_outputs.remove(id);
+                        self.command_last_run.remove(id);
+                        continue;
+                    }
+
+                    let effective_trigger = trigger.unwrap_or(if interval_ms.is_some() {
+                        CommandTrigger::Interval
+                    } else {
+                        CommandTrigger::Change
+                    });
+
+                    let is_due = match effective_trigger {
+                        CommandTrigger::Interval => {
+                            let interval = Duration::from_millis(interval_ms.unwrap_or(5000));
+                            match self.command_last_run.get(id) {
+                                None => true,
+                                Some(&last) => now.saturating_duration_since(last) >= interval,
+                            }
+                        }
+                        CommandTrigger::Cwd => {
+                            !self.command_last_run.contains_key(id) || cwd_changed
+                        }
+                        CommandTrigger::Change => {
+                            !self.command_last_run.contains_key(id) || cwd_changed || cmd_finished
+                        }
                     };
+
                     if is_due {
                         self.command_last_run.insert(id.clone(), now);
                         due.push((id.clone(), cmd.clone()));
@@ -469,6 +507,37 @@ impl TelemetryStore {
         self.dynamic_overlays
             .retain(|_, entry| entry.expires_at.is_none_or(|exp| exp > now));
     }
+}
+
+pub(crate) fn expand_tilde_path(cwd: &str) -> PathBuf {
+    if cwd == "~" {
+        if let Ok(home) = std::env::var("HOME") {
+            return PathBuf::from(home);
+        }
+    } else if let Some(rest) = cwd.strip_prefix("~/")
+        && let Ok(home) = std::env::var("HOME")
+    {
+        return Path::new(&home).join(rest);
+    }
+    PathBuf::from(cwd)
+}
+
+fn matches_when_files(cwd: Option<&str>, when_files: &[String]) -> bool {
+    if when_files.is_empty() {
+        return true;
+    }
+    let Some(cwd_str) = cwd else {
+        return false;
+    };
+    let start_dir = expand_tilde_path(cwd_str);
+    for ancestor in start_dir.ancestors() {
+        for file_name in when_files {
+            if ancestor.join(file_name).exists() {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 /// Suppress unused import warning when `Color` is used through `CellStyle`
