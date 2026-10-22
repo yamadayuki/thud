@@ -67,7 +67,6 @@ pub struct Compositor {
     vt: VtScreenAdapter,
     store: TelemetryStore,
     zen_mode: bool,
-    dashboard_mode: bool,
     prev_buffer: Option<Buffer>,
 }
 
@@ -95,7 +94,6 @@ impl Compositor {
             vt,
             store,
             zen_mode: false,
-            dashboard_mode: false,
             prev_buffer: None,
         };
 
@@ -122,8 +120,6 @@ impl Compositor {
         match event {
             Event::HostInput(bytes) => {
                 let zen_byte = Config::parse_hotkey_byte(self.config.zen_toggle_key.as_deref());
-                let dash_byte =
-                    Config::parse_hotkey_byte(self.config.dashboard_toggle_key.as_deref());
 
                 for &b in bytes {
                     if Some(b) == zen_byte {
@@ -131,8 +127,6 @@ impl Compositor {
                         let new_child_size = self.child_size();
                         self.vt.set_size(new_child_size.cols, new_child_size.rows);
                         child_pty_resize = Some(new_child_size);
-                    } else if Some(b) == dash_byte {
-                        self.dashboard_mode = !self.dashboard_mode;
                     } else {
                         child_pty_input.push(b);
                     }
@@ -193,11 +187,6 @@ impl Compositor {
     /// Returns whether Zen Mode (all HUD hidden) is currently active.
     pub fn is_zen_mode(&self) -> bool {
         self.zen_mode
-    }
-
-    /// Returns whether Dashboard Mode is currently active.
-    pub fn is_dashboard_mode(&self) -> bool {
-        self.dashboard_mode
     }
 
     fn compose_and_diff(&mut self, now: Instant) -> Vec<u8> {
@@ -290,7 +279,6 @@ impl Compositor {
             ScreenCondition::Always => {}
             ScreenCondition::PrimaryOnly if is_alt => return,
             ScreenCondition::AlternateOnly if !is_alt => return,
-            ScreenCondition::DashboardOnly if !self.dashboard_mode => return,
             _ => {}
         }
 
@@ -731,24 +719,16 @@ mod tests {
     }
 
     #[test]
-    fn intercepts_zen_mode_and_dashboard_hotkeys_and_tracks_active_command() {
+    fn intercepts_zen_mode_hotkey_and_tracks_active_command() {
         let t0 = Instant::now();
         let cfg = Config::from_toml(
             r#"
             zen_toggle_key = "ctrl-\\"
-            dashboard_toggle_key = "ctrl-]"
 
             [status_bar]
             height = 1
             left = [{ type = "active_command", min_secs = 2 }]
             right = []
-
-            [[overlays]]
-            id = "dash"
-            anchor = "top_left"
-            screen_mode = "dashboard_only"
-            collision = { mode = "ignore" }
-            widgets = [{ type = "text", text = "DASHBOARD" }]
         "#,
         )
         .unwrap();
@@ -780,20 +760,14 @@ mod tests {
         );
         assert!(comp.rendered_text().contains("⚙ cargo"));
 
-        // 2. Toggle Dashboard Mode via Ctrl+] (0x1d) -> "DASHBOARD" overlay appears!
-        let tx_dash = comp.step(Event::HostInput(b"a\x1db"), t3);
-        assert_eq!(tx_dash.child_pty_input, b"ab");
-        assert!(comp.is_dashboard_mode());
-        assert!(comp.rendered_text().contains("DASHBOARD"));
-
-        // 3. Toggle Zen Mode via Ctrl+\ (0x1c) -> HUD hidden and child PTY expands to 20x4!
-        let tx_zen = comp.step(Event::HostInput(b"\x1c"), t3);
+        // 2. Toggle Zen Mode via Ctrl+\ (0x1c) -> HUD hidden and child PTY expands to 20x4!
+        let tx_zen = comp.step(Event::HostInput(b"a\x1cb"), t3);
+        assert_eq!(tx_zen.child_pty_input, b"ab");
         assert!(comp.is_zen_mode());
         assert_eq!(
             tx_zen.child_pty_resize,
             Some(TermSize { cols: 20, rows: 4 })
         );
-        assert!(!comp.rendered_text().contains("DASHBOARD"));
         assert!(!comp.rendered_text().contains("⚙ cargo"));
     }
 

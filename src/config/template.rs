@@ -66,15 +66,6 @@ impl Config {
             out.push_str("# zen_toggle_key = \"ctrl-\\\\\"\n");
         }
 
-        out.push_str(
-            "\n# Hotkey to toggle Dashboard overlays (`screen_mode = \"dashboard_only\"`):\n",
-        );
-        if let Some(key) = &self.dashboard_toggle_key {
-            let _ = writeln!(out, "dashboard_toggle_key = {}", toml_quote(key));
-        } else {
-            out.push_str("# dashboard_toggle_key = \"ctrl-]\"\n");
-        }
-
         // [status_bar] section
         out.push_str(
             "\n# -----------------------------------------------------------------------------\n\
@@ -257,8 +248,7 @@ fn write_overlay(out: &mut String, ov: &OverlayConfig) {
         "\n# Which screen buffer mode this overlay is visible in:\n\
          #   \"always\"         -> Both normal shell and fullscreen TUI apps (vim, htop, less)\n\
          #   \"primary_only\"   -> Only normal shell screen; hidden during fullscreen TUI apps\n\
-         #   \"alternate_only\" -> Only during fullscreen TUI apps\n\
-         #   \"dashboard_only\" -> Only when toggled via `dashboard_toggle_key` (default: Ctrl+])\n",
+         #   \"alternate_only\" -> Only during fullscreen TUI apps\n",
     );
     let _ = writeln!(
         out,
