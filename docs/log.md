@@ -1,4 +1,7 @@
 ## 2026-10-22
+* **Update**: Updated concept `decisions/adr-003-performance-deepening-and-frame-pacing.md`.
+* **Update**: Linked `decisions/adr-003-performance-deepening-and-frame-pacing.md` to `architecture/compositor-module.md` (deepens compositor and session seams for wire-speed PTY throughput and 144 FPS pacing).
+* **Creation**: Documented concept `decisions/adr-003-performance-deepening-and-frame-pacing.md` (Performance Deepening, Frame Pacing, and Zero-Allocation Cell Grid).
 * **Update**: Updated concept `decisions/adr-002-modular-decomposition-and-ui-buffer-seam.md`.
 * **Creation**: Documented concept `decisions/adr-002-modular-decomposition-and-ui-buffer-seam.md` (ADR-002: Internal Module Decomposition and Ratatui-Style 2D UI Buffer Seam).
 * **Update**: Updated concept `decisions/adr-001-design-it-twice-compositor-seam.md`.

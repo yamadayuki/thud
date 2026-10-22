@@ -7,7 +7,7 @@ Terminal-emulator-agnostic and shell-agnostic PTY HUD compositor that renders do
 ### 2D UI Rendering (`src/ui/`)
 
 **Buffer**:
-A 2D grid of styled terminal cells (`Cell`) that enforces CJK 2-cell wide-character boundary healing on write and computes minimal ANSI SGR/CUP diffs against a previous `Buffer`.
+A 2D grid of styled terminal cells (`Cell`) holding inline scalar characters (`char`) with zero-allocation double-buffering, CJK 2-cell wide-character boundary healing on write, and minimal ANSI SGR/CUP diffs with virtual run-length cursor tracking against a previous `Buffer`.
 _Avoid_: FrameGrid, Canvas, ScreenBuffer
 
 **Span**:
@@ -29,7 +29,7 @@ _Avoid_: Component, View, Control
 ### Compositor (`src/compositor/`)
 
 **Compositor**:
-The pure Sans-I/O state machine that merges virtual terminal screen state, `TelemetryStore` values, and `PlacementSolver` geometry into a `Buffer` and emits `Transition` outputs.
+The pure Sans-I/O state machine that merges virtual terminal screen state, `TelemetryStore` values, and `PlacementSolver` geometry into a `Buffer`, separating event ingestion (`step`) from frame composition (`render`).
 _Avoid_: Renderer, Engine, ScreenManager
 
 **TelemetryStore**:
