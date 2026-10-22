@@ -1,5 +1,5 @@
-use crate::compositor::BuiltinValues;
 use crate::compositor::layout::PlacementSolver;
+use crate::compositor::{BuiltinValues, CommandKey};
 use crate::config::{Config, ConfigError, IpcMessage, TermSize};
 use crate::session::SessionError;
 use crate::session::ipc::OsIpcServer;
@@ -7,6 +7,7 @@ use crate::session::probes::SystemProbes;
 use crate::session::pty::OsChildPty;
 use crate::session::tty::{self, OsHostTerminal};
 use chrono::{DateTime, Local};
+use std::collections::BTreeSet;
 use std::io;
 use std::process::{Command, Stdio};
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -47,11 +48,17 @@ pub(crate) trait SessionIo {
     fn take_terminate(&mut self) -> bool;
 
     fn drain_ipc(&mut self) -> Vec<IpcMessage>;
-    /// Starts `cmd` asynchronously in the child's working directory; its output is later
-    /// returned by `drain_command_outputs` under `id`.
-    fn spawn_command(&mut self, id: String, cmd: String);
-    fn drain_command_outputs(&mut self) -> Vec<(String, String)>;
-    fn sample_builtins(&mut self, now: Instant) -> BuiltinValues;
+    /// Starts `cmd` asynchronously in the child's working directory. Its completion is always
+    /// reported by `drain_finished_commands` under `key`: stdout on success, `None` on failure.
+    fn spawn_command(&mut self, key: CommandKey, cmd: String);
+    fn drain_finished_commands(&mut self) -> Vec<(CommandKey, Option<String>)>;
+    /// Samples builtin telemetry, including which of `watched_markers` exist in the CWD or
+    /// its ancestors.
+    fn sample_builtins(
+        &mut self,
+        now: Instant,
+        watched_markers: &BTreeSet<String>,
+    ) -> BuiltinValues;
 
     /// Returns true when the config source changed since the last `load_config`.
     fn config_changed(&mut self) -> bool;
@@ -66,8 +73,8 @@ pub(crate) struct OsSessionIo {
     pty: OsChildPty,
     ipc: OsIpcServer,
     probes: SystemProbes,
-    cmd_tx: Sender<(String, String)>,
-    cmd_rx: Receiver<(String, String)>,
+    cmd_tx: Sender<(CommandKey, Option<String>)>,
+    cmd_rx: Receiver<(CommandKey, Option<String>)>,
     config_mtime: Option<SystemTime>,
     host: OsHostTerminal,
 }
@@ -189,7 +196,7 @@ impl SessionIo for OsSessionIo {
         self.ipc.drain_messages()
     }
 
-    fn spawn_command(&mut self, id: String, cmd: String) {
+    fn spawn_command(&mut self, key: CommandKey, cmd: String) {
         let cwd = SystemProbes::resolve_pty_cwd(self.pty.master_fd, self.pty.child_pid);
         let tx = self.cmd_tx.clone();
         thread::spawn(move || {
@@ -202,20 +209,25 @@ impl SessionIo for OsSessionIo {
             if let Some(dir) = cwd {
                 command.current_dir(dir);
             }
-            if let Ok(output) = command.output() {
-                let text = String::from_utf8_lossy(&output.stdout).to_string();
-                let _ = tx.send((id, text));
-            }
+            let output = command
+                .output()
+                .ok()
+                .map(|out| String::from_utf8_lossy(&out.stdout).to_string());
+            let _ = tx.send((key, output));
         });
     }
 
-    fn drain_command_outputs(&mut self) -> Vec<(String, String)> {
+    fn drain_finished_commands(&mut self) -> Vec<(CommandKey, Option<String>)> {
         self.cmd_rx.try_iter().collect()
     }
 
-    fn sample_builtins(&mut self, now: Instant) -> BuiltinValues {
+    fn sample_builtins(
+        &mut self,
+        now: Instant,
+        watched_markers: &BTreeSet<String>,
+    ) -> BuiltinValues {
         self.probes
-            .sample(self.pty.master_fd, self.pty.child_pid, now)
+            .sample(self.pty.master_fd, self.pty.child_pid, now, watched_markers)
     }
 
     fn config_changed(&mut self) -> bool {

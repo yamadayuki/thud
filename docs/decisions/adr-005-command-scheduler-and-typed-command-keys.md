@@ -3,7 +3,7 @@ type: Decision
 title: "ADR-005: CommandScheduler, Typed Command Keys, and Filesystem Checks Behind SessionIo"
 description: "Consolidate command scheduling into a CommandScheduler inside Compositor with typed command keys, move when_files filesystem checks behind SessionIo, and prevent overlapping and stale command runs."
 tags: [adr, architecture, compositor, commands, sans-io, codebase-design]
-generated: { by: claude-code/claude-opus-5-5, at: "2026-10-22T22:11:38Z" }
+generated: { by: claude-code/claude-opus-5-5, at: "2026-10-22T22:31:02Z" }
 status: stable
 ---
 
@@ -20,7 +20,7 @@ Periodic and event-driven shell commands (`command` widgets, and `sparkline` / `
 1. **`CommandScheduler` inside `Compositor`.** A new internal module owns trigger evaluation (`interval`, `cwd`, `change`), `when_files` matching, in-flight tracking, last-run timestamps, and output interpretation and storage. Only metric values are forwarded to `TelemetryStore`.
 2. **Typed command keys.** The `"__metric__:"` prefix is replaced by an enum distinguishing widget commands (by widget id) from metric commands (by metric key). The due commands in `Transition` and `Event::CommandOutput` carry this type.
 3. **Filesystem checks move behind `SessionIo`.** `Compositor` exposes the set of watched marker file names (including those from IPC-injected dynamic overlays); `SessionLoop` hands it to `SystemProbes`, which reports the names found in the CWD's ancestors through `BuiltinValues`. `Compositor` only matches sets. `expand_tilde_path` is deleted.
-4. **Re-check cadence.** Marker presence is re-evaluated only when the CWD changes or a foreground command finishes, so steady-state ticks perform no filesystem I/O while files created by a command (e.g. `cargo init`) are still picked up.
+4. **Re-check cadence.** Marker presence — and, by the same rule, the Git branch — is re-evaluated only when the CWD changes or a foreground command finishes, so steady-state ticks perform no filesystem I/O while files created by a command (e.g. `cargo init`) and branch switches (e.g. `git switch`) are still picked up.
 5. **No overlapping runs.** A command whose previous run is still in flight is not dispatched again.
 6. **Completion is always reported.** `SessionIo` reports every dispatched command's completion, success or failure. On failure the in-flight flag is cleared and the previous output is kept on screen.
 7. **Reload re-runs only changed commands.** On config reload, commands with a new id or a changed `cmd`, `trigger`, or `when_files` run immediately; unchanged commands keep their output and schedule.

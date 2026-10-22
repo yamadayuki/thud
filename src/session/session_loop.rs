@@ -125,8 +125,8 @@ impl<Io: SessionIo> SessionLoop<Io> {
             }
         }
 
-        for (id, output) in self.io.drain_command_outputs() {
-            self.step(Event::CommandOutput { id, output }, now)?;
+        for (key, output) in self.io.drain_finished_commands() {
+            self.step(Event::CommandFinished { key, output }, now)?;
         }
 
         if now.saturating_duration_since(self.last_tick) >= TICK_INTERVAL {
@@ -161,7 +161,8 @@ impl<Io: SessionIo> SessionLoop<Io> {
 
     fn tick(&mut self, now: Instant) -> io::Result<()> {
         self.last_tick = now;
-        let builtins = self.io.sample_builtins(now);
+        let watched = self.compositor.watched_markers();
+        let builtins = self.io.sample_builtins(now, &watched);
         let wall_clock = self.io.wall_clock();
         self.step(
             Event::Tick {
@@ -224,8 +225,8 @@ fn apply<Io: SessionIo>(io: &mut Io, tx: &Transition) -> io::Result<()> {
     if !tx.host_ansi_diff.is_empty() {
         io.write_host(&tx.host_ansi_diff)?;
     }
-    for (id, cmd) in &tx.due_commands {
-        io.spawn_command(id.clone(), cmd.clone());
+    for due in &tx.due_commands {
+        io.spawn_command(due.key.clone(), due.cmd.clone());
     }
     Ok(())
 }
@@ -233,7 +234,7 @@ fn apply<Io: SessionIo>(io: &mut Io, tx: &Transition) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::compositor::BuiltinValues;
+    use crate::compositor::{BuiltinValues, CommandKey};
     use crate::config::{ConfigError, TermSize};
     use crate::session::memory_io::{MemorySessionIo, SpawnedCommand};
     use chrono::{Local, TimeZone};
@@ -298,7 +299,7 @@ mod tests {
         assert_eq!(
             session.io_mut().take_spawned(),
             vec![SpawnedCommand {
-                id: "uptime".to_string(),
+                key: CommandKey::Widget("uptime".to_string()),
                 cmd: "echo up".to_string(),
                 cwd: Some("/work/thud".into()),
             }]
@@ -306,7 +307,7 @@ mod tests {
 
         session
             .io_mut()
-            .complete_command("uptime", "UP:5d")
+            .complete_command(CommandKey::Widget("uptime".to_string()), "UP:5d")
             .push_pty_output(b"\x1b[?1049h\x1b[1;1H-- VIM BUFFER --")
             .push_ipc(IpcMessage::SetSlot {
                 key: "mode".to_string(),
@@ -327,6 +328,45 @@ mod tests {
 
         // The interval command is dispatched again on the first tick after its interval elapses.
         session.advance(Duration::from_millis(1000) + TICK_INTERVAL);
+        assert_eq!(session.io_mut().take_spawned().len(), 1);
+    }
+
+    #[test]
+    fn hands_watched_markers_to_probes_and_reports_failed_commands() {
+        let config = Config::from_toml(
+            r#"
+            overlays = []
+
+            [status_bar]
+            left = [{ type = "command", id = "rust", cmd = "rustc -V", when_files = ["Cargo.toml"] }]
+            "#,
+        )
+        .unwrap();
+        let mut session = start(config, MemorySessionIo::new(40, 3));
+        assert_eq!(
+            session.io().watched_markers(),
+            &["Cargo.toml".to_string()].into()
+        );
+        assert!(session.io_mut().take_spawned().is_empty());
+
+        session.io_mut().set_builtins(BuiltinValues {
+            cwd: Some("~/thud".to_string()),
+            found_markers: ["Cargo.toml".to_string()].into(),
+            ..BuiltinValues::default()
+        });
+        session.advance(TICK_INTERVAL + FRAME_INTERVAL);
+        let key = CommandKey::Widget("rust".to_string());
+        assert_eq!(session.io_mut().take_spawned().len(), 1);
+
+        // A failed run is released, so the next cwd change dispatches it again.
+        session.io_mut().fail_command(key);
+        session.advance(Duration::ZERO);
+        session.io_mut().set_builtins(BuiltinValues {
+            cwd: Some("~/thud/src".to_string()),
+            found_markers: ["Cargo.toml".to_string()].into(),
+            ..BuiltinValues::default()
+        });
+        session.advance(TICK_INTERVAL);
         assert_eq!(session.io_mut().take_spawned().len(), 1);
     }
 

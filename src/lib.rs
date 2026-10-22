@@ -3,7 +3,7 @@ pub mod config;
 pub mod session;
 pub mod ui;
 
-pub use compositor::{BuiltinValues, Compositor, Event, Transition};
+pub use compositor::{BuiltinValues, CommandKey, Compositor, DueCommand, Event, Transition};
 pub use config::{
     Anchor, BorderStyle, CellStyle, CollisionPolicy, Color, CommandTrigger, Config, ConfigError,
     IpcMessage, OverlayConfig, ScreenCondition, SegmentFormat, StatusBarConfig, TermSize,

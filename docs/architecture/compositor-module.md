@@ -3,7 +3,7 @@ type: Architecture
 title: "Deep Compositor & Session Module Architecture"
 description: Two-tier deep module design pairing a deterministic Sans-I/O Compositor core with a declarative Session runner.
 tags: [architecture, codebase-design, compositor, seam, sans-io]
-generated: { by: claude-code/claude-opus-5-5, at: "2026-10-22T22:26:26Z" }
+generated: { by: claude-code/claude-opus-5-5, at: "2026-10-22T22:31:02Z" }
 status: stable
 ---
 
@@ -31,6 +31,7 @@ flowchart TB
     subgraph CompositorModule["Module: src/compositor/ (Sans-I/O Deep Core Seam)"]
         Step["mod.rs: Compositor::new / step(Event, Instant) -> Transition"]
         Store["store.rs: TelemetryStore (TTL Slots, Metrics, Toasts, ActiveCmd)"]
+        Sched["scheduler.rs: CommandScheduler (triggers, when_files, in-flight, outputs)"]
         VTE["vt.rs: VtScreenAdapter & Terminal Query Responder"]
         Layout["layout.rs: PlacementSolver (Anchor & Text/Cursor Dodge)"]
     end
@@ -49,6 +50,7 @@ flowchart TB
     Loop --> InternalSeam
     Loop --> Step
     Step --> Store
+    Step --> Sched
     Step --> VTE
     Step --> Layout
     Step --> Widgets
@@ -77,7 +79,8 @@ flowchart TB
   - `Compositor::render(&mut self, now: Instant) -> Option<Vec<u8>>`
   - `Compositor::is_dirty(&self) -> bool`
 - **Internal Submodules**:
-  - `store.rs` (`TelemetryStore`): Manages ephemeral IPC slots, metric ring buffers, stacked toast notifications, periodic command outputs, and foreground command timers.
+  - `store.rs` (`TelemetryStore`): Manages ephemeral IPC slots, metric ring buffers, stacked toast notifications, dynamic overlays, and foreground command timers.
+  - `scheduler.rs` (`CommandScheduler`, ADR-005): Decides when `command` widgets and metric `cmd`s are due (`interval` / `cwd` / `change` triggers, `when_files` markers reported through `BuiltinValues::found_markers`), never re-dispatches a command still in flight, keeps the previous output when a run fails, re-runs only changed specs after reload, and keys commands with the typed `CommandKey` (`Widget(id)` / `Metric(key)`). `Compositor::watched_markers` exposes the marker names to resolve.
   - `vt.rs` (`VtScreenAdapter`): Wraps `vt100::Parser` (Primary/Alternate screen), copies virtual terminal cells into `Buffer`, and synthesizes replies to terminal queries (`DA1`, `DA2`, `DSR 5/6`, `XTVERSION`, Kitty keyboard, `OSC 10/11`).
   - `layout.rs` (`PlacementSolver`): Computes child PTY viewport size and resolves floating overlay bounding-box positions with cursor and non-whitespace text collision dodging (`Ignore`, `AutoHide`, `DodgeToOppositeCorner`).
 - **Decoupled Ingestion & Pacing**:
@@ -97,7 +100,7 @@ flowchart TB
   - `tty.rs` (`OsHostTerminal`): Direct `STDIN_FILENO` (`0`) raw mode configuration and poll descriptor, atomic `SIGWINCH` and `SIGTERM`/`SIGHUP`/`SIGINT` graceful shutdown signal interception, terminal device name resolution (`get_tty_name`), and alternate screen buffer restoration.
   - `pty.rs` (`OsChildPty`): Manages `forkpty`, `TIOCSWINSZ`, non-blocking PTY I/O, child lifecycle cleanup (`SIGHUP` on drop), and exports child session variables (`THUD_SOCKET`, `THUD_ACTIVE`, `THUD_TTY`).
   - `ipc.rs` (`OsIpcServer`): Non-blocking Unix domain socket listener and client message sender with automatic socket file removal on drop.
-  - `probes.rs` (`SystemProbes`): Stateful OS telemetry collector (`sample(master_fd, child_pid, now) -> BuiltinValues`) with CWD-memoized Git branch resolution and asynchronous background thread for battery sampling.
+  - `probes.rs` (`SystemProbes`): Stateful OS telemetry collector (`sample(master_fd, child_pid, now, watched_markers) -> BuiltinValues`) that re-resolves the Git branch and `when_files` markers only when the CWD changes or a foreground command finishes, plus an asynchronous background thread for battery sampling.
 - **Fail-Safe Session Lifecycle**:
   - Verifies socket liveness and TTY identity before asserting a nested session, automatically purging stale inherited environment variables from dead parent sessions.
   - Supports `--force` (`-f`) override to bypass nested checks explicitly.

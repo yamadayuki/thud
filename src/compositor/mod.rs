@@ -1,16 +1,21 @@
 pub(crate) mod layout;
+pub(crate) mod scheduler;
 pub(crate) mod store;
 pub(crate) mod vt;
 
+pub use scheduler::{CommandKey, DueCommand};
+
 use crate::compositor::layout::PlacementSolver;
-use crate::compositor::store::TelemetryStore;
+use crate::compositor::scheduler::{CommandScheduler, ScheduleContext, watched_markers};
+use crate::compositor::store::{TelemetryStore, TickChanges};
 use crate::compositor::vt::{MouseEventKind, VtScreenAdapter, parse_mouse_event};
 use crate::config::{
     Anchor, Color, Config, ConfigError, IpcMessage, OverlayConfig, ScreenCondition,
-    StatusBarPosition, TermSize,
+    StatusBarPosition, TermSize, WidgetSpec,
 };
 use crate::ui::{Block, Buffer, CellStyle, Gauge, Line, Rect, StatusBar, Toast, Widget};
 use chrono::{DateTime, Local};
+use std::collections::BTreeSet;
 use std::time::Instant;
 
 /// Built-in environment values passed into `Event::Tick`.
@@ -24,6 +29,8 @@ pub struct BuiltinValues {
     pub fg_process: Option<String>,
     /// System-wide CPU load percentage (`0..=100`), automatically feeding the `"cpu"` metric slot.
     pub cpu_usage: Option<u8>,
+    /// `when_files` marker names (see `Compositor::watched_markers`) found in the CWD or its ancestors.
+    pub found_markers: BTreeSet<String>,
 }
 
 /// All external occurrences that drive the Sans-I/O `Compositor` state machine.
@@ -40,8 +47,12 @@ pub enum Event<'a> {
         wall_clock: DateTime<Local>,
         builtins: BuiltinValues,
     },
-    /// Completed output from an asynchronous periodic shell command (`sh -c ...`).
-    CommandOutput { id: String, output: String },
+    /// A dispatched shell command (`sh -c ...`) finished. `output` is its stdout, or `None` if
+    /// it failed to run.
+    CommandFinished {
+        key: CommandKey,
+        output: Option<String>,
+    },
     /// Dynamic update received from the Unix domain socket IPC server.
     Ipc(IpcMessage),
     /// Replaces the active `Config` in-flight, resizing the child PTY if `status_bar` height changed
@@ -58,8 +69,8 @@ pub struct Transition {
     pub child_pty_input: Vec<u8>,
     /// New child PTY dimensions to apply via `TIOCSWINSZ` if changed.
     pub child_pty_resize: Option<TermSize>,
-    /// Periodic shell commands `(id, cmd)` whose schedule is now due for async execution.
-    pub due_commands: Vec<(String, String)>,
+    /// Shell commands whose schedule is now due for async execution.
+    pub due_commands: Vec<DueCommand>,
     /// True when the user pressed `reload_key` or sent `IpcMessage::ReloadConfig`.
     pub reload_config: bool,
 }
@@ -72,6 +83,7 @@ pub struct Compositor {
     config: Config,
     vt: VtScreenAdapter,
     store: TelemetryStore,
+    scheduler: CommandScheduler,
     zen_mode: bool,
     dirty: bool,
     last_now: Instant,
@@ -94,14 +106,12 @@ impl Compositor {
 
         let child_size = PlacementSolver::compute_child_size(initial_host_size, &config, false);
         let vt = VtScreenAdapter::new(child_size.cols, child_size.rows, config.scrollback_lines);
-        let mut store = TelemetryStore::new();
-        let due_commands = store.collect_due_commands(&config, now, false, false);
-
         let mut comp = Self {
             host_size: initial_host_size,
             config,
             vt,
-            store,
+            store: TelemetryStore::new(),
+            scheduler: CommandScheduler::default(),
             zen_mode: false,
             dirty: false,
             last_now: now,
@@ -109,6 +119,7 @@ impl Compositor {
             prev_buffer: None,
         };
 
+        let due_commands = comp.collect_due_commands(now, TickChanges::default());
         let host_ansi_diff = comp.compose_and_diff(now);
 
         Ok((
@@ -220,10 +231,13 @@ impl Compositor {
                 wall_clock,
                 builtins,
             } => {
-                due_commands = self.store.on_tick(wall_clock, builtins, &self.config, now);
+                let changes = self.store.on_tick(wall_clock, builtins, now);
+                due_commands = self.collect_due_commands(now, changes);
             }
-            Event::CommandOutput { id, output } => {
-                self.store.on_command_output(id, &output);
+            Event::CommandFinished { key, output } => {
+                if let Some(sample) = self.scheduler.finish(key, output.as_deref()) {
+                    self.store.push_metric(sample.key, sample.value);
+                }
             }
             Event::Ipc(msg) => {
                 if msg == IpcMessage::ReloadConfig {
@@ -241,9 +255,7 @@ impl Compositor {
                     child_pty_resize = Some(new_child_size);
                 }
                 self.prev_buffer = None;
-                due_commands = self
-                    .store
-                    .collect_due_commands(&self.config, now, false, false);
+                due_commands = self.collect_due_commands(now, TickChanges::default());
             }
         }
 
@@ -292,6 +304,24 @@ impl Compositor {
     /// Returns whether Zen Mode (all HUD hidden) is currently active.
     pub fn is_zen_mode(&self) -> bool {
         self.zen_mode
+    }
+
+    /// Marker file names referenced by `when_files` filters, to be resolved against the CWD
+    /// and reported back through `BuiltinValues::found_markers`.
+    pub fn watched_markers(&self) -> BTreeSet<String> {
+        watched_markers(effective_widgets(&self.config, &self.store))
+    }
+
+    fn collect_due_commands(&mut self, now: Instant, changes: TickChanges) -> Vec<DueCommand> {
+        self.scheduler.collect_due(
+            effective_widgets(&self.config, &self.store),
+            ScheduleContext {
+                now,
+                cwd_changed: changes.cwd_changed,
+                cmd_finished: changes.cmd_finished,
+                found_markers: &self.store.builtins.found_markers,
+            },
+        )
     }
 
     fn compose_and_diff(&mut self, now: Instant) -> Vec<u8> {
@@ -351,6 +381,7 @@ impl Compositor {
             let bar = StatusBar {
                 base_style: bar_style,
                 left: self.store.build_segment_line(
+                    &self.scheduler,
                     &self.config.status_bar.left,
                     sep,
                     bar_style,
@@ -358,6 +389,7 @@ impl Compositor {
                     now,
                 ),
                 center: self.store.build_segment_line(
+                    &self.scheduler,
                     &self.config.status_bar.center,
                     sep,
                     bar_style,
@@ -365,6 +397,7 @@ impl Compositor {
                     now,
                 ),
                 right: self.store.build_segment_line(
+                    &self.scheduler,
                     &self.config.status_bar.right,
                     sep,
                     bar_style,
@@ -415,9 +448,14 @@ impl Compositor {
 
         let mut lines: Vec<Line> = Vec::new();
         for w in &ov.widgets {
-            let evaluated =
-                self.store
-                    .evaluate_widget_lines(w, base_style, self.config.theme, false, now);
+            let evaluated = self.store.evaluate_widget_lines(
+                &self.scheduler,
+                w,
+                base_style,
+                self.config.theme,
+                false,
+                now,
+            );
             lines.extend(evaluated);
         }
         if lines.is_empty() {
@@ -536,12 +574,47 @@ impl Compositor {
     }
 }
 
+/// Every widget currently configured: status bar sections, config overlays, and
+/// IPC-injected dynamic overlays.
+fn effective_widgets<'a>(
+    config: &'a Config,
+    store: &'a TelemetryStore,
+) -> impl Iterator<Item = &'a WidgetSpec> {
+    config
+        .status_bar
+        .left
+        .iter()
+        .chain(&config.status_bar.center)
+        .chain(&config.status_bar.right)
+        .chain(config.overlays.iter().flat_map(|ov| ov.widgets.iter()))
+        .chain(
+            store
+                .dynamic_overlays
+                .values()
+                .flat_map(|ov| ov.config.widgets.iter()),
+        )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::config::{CollisionPolicy, ToastLevel};
     use chrono::TimeZone;
     use std::time::Duration;
+
+    fn due(id: &str, cmd: &str) -> DueCommand {
+        DueCommand {
+            key: CommandKey::Widget(id.to_string()),
+            cmd: cmd.to_string(),
+        }
+    }
+
+    fn finished(id: &str, output: &str) -> Event<'static> {
+        Event::CommandFinished {
+            key: CommandKey::Widget(id.to_string()),
+            output: Some(output.to_string()),
+        }
+    }
 
     fn sample_config() -> Config {
         Config::from_toml(
@@ -578,10 +651,7 @@ mod tests {
             init_tx.child_pty_resize,
             Some(TermSize { cols: 20, rows: 3 })
         );
-        assert_eq!(
-            init_tx.due_commands,
-            vec![("custom_cmd".to_string(), "echo ok".to_string())]
-        );
+        assert_eq!(init_tx.due_commands, vec![due("custom_cmd", "echo ok")]);
 
         let fixed_time = Local.with_ymd_and_hms(2026, 10, 22, 14, 30, 0).unwrap();
         comp.step(
@@ -589,10 +659,7 @@ mod tests {
                 wall_clock: fixed_time,
                 builtins: BuiltinValues {
                     cwd: Some("~/thud".to_string()),
-                    git_branch: None,
-                    battery: None,
-                    fg_process: None,
-                    cpu_usage: None,
+                    ..BuiltinValues::default()
                 },
             },
             now,
@@ -606,13 +673,7 @@ mod tests {
             }),
             now,
         );
-        comp.step(
-            Event::CommandOutput {
-                id: "custom_cmd".to_string(),
-                output: "R1".to_string(),
-            },
-            now,
-        );
+        comp.step(finished("custom_cmd", "R1"), now);
 
         assert_eq!(
             comp.rendered_text(),
@@ -952,93 +1013,163 @@ mod tests {
 
         let (mut comp, init_tx) =
             Compositor::new(TermSize { cols: 30, rows: 3 }, cfg, now).unwrap();
-        // Before first tick, CWD is None and when_files is non-empty -> not due
+        // Before the first tick no marker has been found -> not due
         assert!(init_tx.due_commands.is_empty());
+        assert_eq!(comp.watched_markers(), ["Cargo.toml".to_string()].into());
 
-        let repo_dir = std::env::current_dir()
-            .unwrap()
-            .join("src")
-            .display()
-            .to_string();
+        let in_crate = |fg_process: Option<&str>| BuiltinValues {
+            cwd: Some("~/thud/src".to_string()),
+            fg_process: fg_process.map(str::to_string),
+            found_markers: ["Cargo.toml".to_string()].into(),
+            ..BuiltinValues::default()
+        };
+        let tick = |builtins| Event::Tick {
+            wall_clock: Local::now(),
+            builtins,
+        };
 
-        // 1. Enter repository subdirectory (`src/` has ancestor `Cargo.toml`) -> due!
-        let tx1 = comp.step(
-            Event::Tick {
-                wall_clock: Local::now(),
-                builtins: BuiltinValues {
-                    cwd: Some(repo_dir.clone()),
-                    ..Default::default()
-                },
-            },
-            now,
-        );
-        assert_eq!(
-            tx1.due_commands,
-            vec![("rust".to_string(), "rustc -V".to_string())]
-        );
-        comp.step(
-            Event::CommandOutput {
-                id: "rust".to_string(),
-                output: "1.85.0".to_string(),
-            },
-            now,
-        );
+        // 1. Enter a directory whose ancestors contain `Cargo.toml` -> due!
+        let tx1 = comp.step(tick(in_crate(None)), now);
+        assert_eq!(tx1.due_commands, vec![due("rust", "rustc -V")]);
+        comp.step(finished("rust", "1.85.0"), now);
         assert!(comp.rendered_text().contains("1.85.0"));
 
-        // 2. Subsequent tick in same directory with no foreground command completion -> NOT due
-        let tx2 = comp.step(
-            Event::Tick {
-                wall_clock: Local::now(),
-                builtins: BuiltinValues {
-                    cwd: Some(repo_dir.clone()),
-                    ..Default::default()
-                },
-            },
-            now + Duration::from_secs(10),
-        );
+        // 2. Same directory, no foreground command completion -> NOT due
+        let tx2 = comp.step(tick(in_crate(None)), now + Duration::from_secs(10));
         assert!(tx2.due_commands.is_empty());
 
         // 3. Foreground command starts and then finishes -> due again!
         comp.step(
-            Event::Tick {
-                wall_clock: Local::now(),
-                builtins: BuiltinValues {
-                    cwd: Some(repo_dir.clone()),
-                    fg_process: Some("rustup".to_string()),
-                    ..Default::default()
-                },
-            },
+            tick(in_crate(Some("rustup"))),
             now + Duration::from_secs(11),
         );
-        let tx3 = comp.step(
-            Event::Tick {
-                wall_clock: Local::now(),
-                builtins: BuiltinValues {
-                    cwd: Some(repo_dir),
-                    fg_process: None,
-                    ..Default::default()
-                },
-            },
-            now + Duration::from_secs(12),
-        );
-        assert_eq!(
-            tx3.due_commands,
-            vec![("rust".to_string(), "rustc -V".to_string())]
-        );
+        let tx3 = comp.step(tick(in_crate(None)), now + Duration::from_secs(12));
+        assert_eq!(tx3.due_commands, vec![due("rust", "rustc -V")]);
 
-        // 4. Leave directory to `/` (no `Cargo.toml`) -> not due and cached output cleared immediately!
+        // 4. Leave to a directory without `Cargo.toml` -> not due and cached output cleared
         let tx4 = comp.step(
-            Event::Tick {
-                wall_clock: Local::now(),
-                builtins: BuiltinValues {
-                    cwd: Some("/".to_string()),
-                    ..Default::default()
-                },
-            },
+            tick(BuiltinValues {
+                cwd: Some("/".to_string()),
+                ..BuiltinValues::default()
+            }),
             now + Duration::from_secs(13),
         );
         assert!(tx4.due_commands.is_empty());
         assert!(!comp.rendered_text().contains("1.85.0"));
+    }
+
+    #[test]
+    fn in_flight_commands_are_not_redispatched_and_failures_keep_previous_output() {
+        let t0 = Instant::now();
+        let (mut comp, init_tx) =
+            Compositor::new(TermSize { cols: 20, rows: 4 }, sample_config(), t0).unwrap();
+        assert_eq!(init_tx.due_commands, vec![due("custom_cmd", "echo ok")]);
+
+        let tick = |comp: &mut Compositor, at: Instant| {
+            comp.step(
+                Event::Tick {
+                    wall_clock: Local::now(),
+                    builtins: BuiltinValues::default(),
+                },
+                at,
+            )
+            .due_commands
+        };
+
+        // Interval elapsed but the first run is still in flight -> skipped
+        assert!(tick(&mut comp, t0 + Duration::from_secs(3)).is_empty());
+
+        comp.step(finished("custom_cmd", "R1"), t0 + Duration::from_secs(3));
+        assert_eq!(
+            tick(&mut comp, t0 + Duration::from_secs(4)),
+            vec![due("custom_cmd", "echo ok")]
+        );
+
+        // A failed run releases the command and keeps the previous output on screen
+        comp.step(
+            Event::CommandFinished {
+                key: CommandKey::Widget("custom_cmd".to_string()),
+                output: None,
+            },
+            t0 + Duration::from_secs(4),
+        );
+        assert!(comp.rendered_text().contains("R1"));
+        assert_eq!(
+            tick(&mut comp, t0 + Duration::from_secs(6)),
+            vec![due("custom_cmd", "echo ok")]
+        );
+    }
+
+    #[test]
+    fn reload_reruns_only_commands_whose_spec_changed() {
+        let t0 = Instant::now();
+        let config = |uptime_cmd: &str| {
+            Config::from_toml(&format!(
+                r#"
+                overlays = []
+
+                [status_bar]
+                left = [
+                    {{ type = "command", id = "uptime", cmd = "{uptime_cmd}", trigger = "cwd" }},
+                    {{ type = "command", id = "user", cmd = "whoami", trigger = "cwd" }}
+                ]
+                "#
+            ))
+            .unwrap()
+        };
+        let (mut comp, init_tx) =
+            Compositor::new(TermSize { cols: 40, rows: 3 }, config("uptime"), t0).unwrap();
+        assert_eq!(init_tx.due_commands.len(), 2);
+        comp.step(finished("uptime", "UP"), t0);
+        comp.step(finished("user", "me"), t0);
+
+        let tx = comp.step(Event::ReloadConfig(config("uptime")), t0);
+        assert!(tx.due_commands.is_empty());
+
+        let tx = comp.step(Event::ReloadConfig(config("uptime -p")), t0);
+        assert_eq!(tx.due_commands, vec![due("uptime", "uptime -p")]);
+        assert!(comp.rendered_text().contains("me"));
+    }
+
+    #[test]
+    fn metric_commands_and_widget_commands_have_distinct_keys() {
+        let t0 = Instant::now();
+        let cfg = Config::from_toml(
+            r#"
+            overlays = []
+
+            [status_bar]
+            separator = " "
+            left = [
+                { type = "command", id = "__metric__:load", cmd = "echo text" },
+                { type = "gauge", key = "load", width = 4, cmd = "echo 40" }
+            ]
+            "#,
+        )
+        .unwrap();
+        let (mut comp, init_tx) = Compositor::new(TermSize { cols: 40, rows: 3 }, cfg, t0).unwrap();
+        assert_eq!(
+            init_tx.due_commands,
+            vec![
+                due("__metric__:load", "echo text"),
+                DueCommand {
+                    key: CommandKey::Metric("load".to_string()),
+                    cmd: "echo 40".to_string(),
+                },
+            ]
+        );
+
+        comp.step(finished("__metric__:load", "TEXT"), t0);
+        comp.step(
+            Event::CommandFinished {
+                key: CommandKey::Metric("load".to_string()),
+                output: Some("40%".to_string()),
+            },
+            t0,
+        );
+        let bar = comp.rendered_text().lines().last().unwrap().to_string();
+        assert!(bar.contains("TEXT"), "{bar}");
+        assert!(bar.contains("40%"), "{bar}");
     }
 
     #[test]

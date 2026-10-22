@@ -1,9 +1,9 @@
-use crate::compositor::BuiltinValues;
+use crate::compositor::{BuiltinValues, CommandKey};
 use crate::config::{Config, ConfigError, IpcMessage, TermSize};
 use crate::session::io::{Readiness, SessionIo};
 use crate::session::session_loop::SessionLoop;
 use chrono::{DateTime, Local, TimeZone};
-use std::collections::VecDeque;
+use std::collections::{BTreeSet, VecDeque};
 use std::io;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 /// A command started by `SessionLoop` through `SessionIo::spawn_command`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SpawnedCommand {
-    pub id: String,
+    pub key: CommandKey,
     pub cmd: String,
     pub cwd: Option<PathBuf>,
 }
@@ -32,7 +32,8 @@ pub(crate) struct MemorySessionIo {
     resized: bool,
     terminated: bool,
     child_exit: Option<i32>,
-    command_outputs: VecDeque<(String, String)>,
+    finished_commands: VecDeque<(CommandKey, Option<String>)>,
+    watched_markers: BTreeSet<String>,
     builtins: BuiltinValues,
     cwd: Option<PathBuf>,
     config: Result<Config, ConfigError>,
@@ -59,7 +60,8 @@ impl MemorySessionIo {
             resized: false,
             terminated: false,
             child_exit: None,
-            command_outputs: VecDeque::new(),
+            finished_commands: VecDeque::new(),
+            watched_markers: BTreeSet::new(),
             builtins: BuiltinValues::default(),
             cwd: None,
             config: Ok(Config::default()),
@@ -133,10 +135,20 @@ impl MemorySessionIo {
         self
     }
 
-    pub fn complete_command(&mut self, id: &str, output: &str) -> &mut Self {
-        self.command_outputs
-            .push_back((id.to_string(), output.to_string()));
+    pub fn complete_command(&mut self, key: CommandKey, output: &str) -> &mut Self {
+        self.finished_commands
+            .push_back((key, Some(output.to_string())));
         self
+    }
+
+    pub fn fail_command(&mut self, key: CommandKey) -> &mut Self {
+        self.finished_commands.push_back((key, None));
+        self
+    }
+
+    /// Marker names the loop last asked `sample_builtins` to look for.
+    pub fn watched_markers(&self) -> &BTreeSet<String> {
+        &self.watched_markers
     }
 
     pub fn take_spawned(&mut self) -> Vec<SpawnedCommand> {
@@ -245,19 +257,24 @@ impl SessionIo for MemorySessionIo {
         self.ipc.drain(..).collect()
     }
 
-    fn spawn_command(&mut self, id: String, cmd: String) {
+    fn spawn_command(&mut self, key: CommandKey, cmd: String) {
         self.spawned.push(SpawnedCommand {
-            id,
+            key,
             cmd,
             cwd: self.cwd.clone(),
         });
     }
 
-    fn drain_command_outputs(&mut self) -> Vec<(String, String)> {
-        self.command_outputs.drain(..).collect()
+    fn drain_finished_commands(&mut self) -> Vec<(CommandKey, Option<String>)> {
+        self.finished_commands.drain(..).collect()
     }
 
-    fn sample_builtins(&mut self, _now: Instant) -> BuiltinValues {
+    fn sample_builtins(
+        &mut self,
+        _now: Instant,
+        watched_markers: &BTreeSet<String>,
+    ) -> BuiltinValues {
+        self.watched_markers = watched_markers.clone();
         self.builtins.clone()
     }
 

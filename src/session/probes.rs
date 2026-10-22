@@ -1,4 +1,5 @@
 use crate::compositor::BuiltinValues;
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 #[cfg(target_os = "macos")]
@@ -10,11 +11,15 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 /// Stateful OS telemetry collector that caches battery status, tracks CPU tick deltas,
-/// and samples foreground process CWD, Git branch, and command name into `BuiltinValues`.
+/// and samples foreground process CWD, Git branch, `when_files` markers, and command name
+/// into `BuiltinValues`.
 #[derive(Debug)]
 pub(crate) struct SystemProbes {
     last_raw_cwd: Option<PathBuf>,
+    last_fg_process: Option<String>,
     cached_git_branch: Option<String>,
+    watched_markers: BTreeSet<String>,
+    cached_found_markers: BTreeSet<String>,
     cached_battery: Option<u8>,
     last_battery_probe: Option<Instant>,
     battery_in_flight: Arc<AtomicBool>,
@@ -27,7 +32,10 @@ impl Default for SystemProbes {
     fn default() -> Self {
         Self {
             last_raw_cwd: None,
+            last_fg_process: None,
             cached_git_branch: None,
+            watched_markers: BTreeSet::new(),
+            cached_found_markers: BTreeSet::new(),
             cached_battery: None,
             last_battery_probe: None,
             battery_in_flight: Arc::new(AtomicBool::new(false)),
@@ -53,12 +61,17 @@ impl SystemProbes {
     }
 
     /// Samples the child PTY's foreground process group for CWD, Git branch, foreground command,
-    /// cached battery status, and system CPU load percentage (`0..=100`).
+    /// which of `watched_markers` exist in the CWD or its ancestors, cached battery status, and
+    /// system CPU load percentage (`0..=100`).
+    ///
+    /// Git branch and markers touch the filesystem only when the CWD changes, a foreground
+    /// command finishes, or the watched marker set changes.
     pub fn sample(
         &mut self,
         pty_master_fd: libc::c_int,
         child_pid: libc::pid_t,
         now: Instant,
+        watched_markers: &BTreeSet<String>,
     ) -> BuiltinValues {
         let fg_pid = unsafe {
             let pgrp = libc::tcgetpgrp(pty_master_fd);
@@ -66,19 +79,13 @@ impl SystemProbes {
         };
 
         let raw_cwd = read_process_cwd(fg_pid).or_else(|| read_process_cwd(child_pid));
-        let git_branch = if raw_cwd != self.last_raw_cwd {
-            self.cached_git_branch = raw_cwd.as_deref().and_then(resolve_git_branch);
-            self.last_raw_cwd = raw_cwd.clone();
-            self.cached_git_branch.clone()
-        } else {
-            self.cached_git_branch.clone()
-        };
-        let cwd = raw_cwd.map(|p| shorten_home(&p));
         let fg_process = if fg_pid != child_pid {
             read_process_name(fg_pid)
         } else {
             None
         };
+        self.refresh_cwd_derived(raw_cwd.clone(), fg_process.clone(), watched_markers);
+        let cwd = raw_cwd.map(|p| shorten_home(&p));
 
         // Drain any async battery sample from the background worker thread
         if let Some(ref rx) = self.battery_rx {
@@ -107,11 +114,34 @@ impl SystemProbes {
 
         BuiltinValues {
             cwd,
-            git_branch,
+            git_branch: self.cached_git_branch.clone(),
             battery: self.cached_battery,
             fg_process,
             cpu_usage,
+            found_markers: self.cached_found_markers.clone(),
         }
+    }
+
+    fn refresh_cwd_derived(
+        &mut self,
+        raw_cwd: Option<PathBuf>,
+        fg_process: Option<String>,
+        watched_markers: &BTreeSet<String>,
+    ) {
+        let cwd_changed = raw_cwd != self.last_raw_cwd;
+        let cmd_finished = self.last_fg_process.is_some() && fg_process.is_none();
+        if cwd_changed || cmd_finished {
+            self.cached_git_branch = raw_cwd.as_deref().and_then(resolve_git_branch);
+        }
+        if cwd_changed || cmd_finished || *watched_markers != self.watched_markers {
+            self.cached_found_markers = raw_cwd
+                .as_deref()
+                .map(|dir| find_markers(dir, watched_markers))
+                .unwrap_or_default();
+            self.watched_markers = watched_markers.clone();
+        }
+        self.last_raw_cwd = raw_cwd;
+        self.last_fg_process = fg_process;
     }
 
     /// Samples system-wide CPU usage percentage at ~1s intervals (plus an initial baseline on frame 1).
@@ -190,6 +220,15 @@ fn read_cpu_ticks() -> Option<[u64; 4]> {
     let sys: u64 = parts.next()?.parse().ok()?;
     let idle: u64 = parts.next()?.parse().ok()?;
     Some([user, sys, idle, nice])
+}
+
+/// Returns the names in `markers` that exist in `start_dir` or any of its ancestors.
+fn find_markers(start_dir: &Path, markers: &BTreeSet<String>) -> BTreeSet<String> {
+    markers
+        .iter()
+        .filter(|name| start_dir.ancestors().any(|dir| dir.join(name).exists()))
+        .cloned()
+        .collect()
 }
 
 pub(crate) fn resolve_git_branch(start_dir: &Path) -> Option<String> {
@@ -354,16 +393,35 @@ mod tests {
     use super::*;
 
     #[test]
-    fn git_branch_resolution_is_memoized_when_cwd_is_unchanged() {
+    fn rechecks_git_branch_and_markers_only_on_cwd_change_or_command_finish() {
+        let root = std::env::temp_dir().join(format!("thud-probe-memo-{}", std::process::id()));
+        let nested = root.join("crate");
+        fs::create_dir_all(root.join(".git")).unwrap();
+        fs::create_dir_all(&nested).unwrap();
+        fs::write(root.join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
+        let watched: BTreeSet<String> = ["Cargo.toml".to_string()].into();
+
         let mut probes = SystemProbes::new();
-        let cwd = std::env::current_dir().unwrap();
-
-        // Prime the cache
-        probes.last_raw_cwd = Some(cwd.clone());
-        probes.cached_git_branch = Some("git:main".to_string());
-
+        probes.refresh_cwd_derived(Some(nested.clone()), None, &watched);
         assert_eq!(probes.cached_git_branch.as_deref(), Some("git:main"));
-        assert_eq!(probes.last_raw_cwd.as_ref(), Some(&cwd));
+        assert!(probes.cached_found_markers.is_empty());
+
+        // A command creates a marker and switches branch: unchanged until it finishes.
+        fs::write(nested.join("Cargo.toml"), "").unwrap();
+        fs::write(root.join(".git/HEAD"), "ref: refs/heads/next\n").unwrap();
+        probes.refresh_cwd_derived(Some(nested.clone()), Some("cargo".to_string()), &watched);
+        assert_eq!(probes.cached_git_branch.as_deref(), Some("git:main"));
+        assert!(probes.cached_found_markers.is_empty());
+
+        probes.refresh_cwd_derived(Some(nested.clone()), None, &watched);
+        assert_eq!(probes.cached_git_branch.as_deref(), Some("git:next"));
+        assert_eq!(probes.cached_found_markers, watched);
+
+        // Leaving the tree clears the markers.
+        probes.refresh_cwd_derived(Some(root.clone()), None, &watched);
+        assert!(probes.cached_found_markers.is_empty());
+
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]

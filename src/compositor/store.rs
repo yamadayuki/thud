@@ -1,11 +1,9 @@
 use crate::compositor::BuiltinValues;
-use crate::config::{
-    CommandTrigger, Config, IpcMessage, OverlayConfig, ToastLevel, WidgetKind, WidgetSpec,
-};
+use crate::compositor::scheduler::CommandScheduler;
+use crate::config::{Config, IpcMessage, OverlayConfig, ToastLevel, WidgetKind, WidgetSpec};
 use crate::ui::{CellStyle, Color, Gauge, Line, Span, Sparkline, ThemeConfig, ThemePalette};
 use chrono::{DateTime, Local};
 use std::collections::{BTreeMap, VecDeque};
-use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 const MAX_METRIC_HISTORY: usize = 64;
@@ -39,8 +37,15 @@ pub(crate) struct DynamicOverlayEntry {
     pub expires_at: Option<Instant>,
 }
 
+/// Environment changes observed by a tick that can make event-driven commands due.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct TickChanges {
+    pub cwd_changed: bool,
+    pub cmd_finished: bool,
+}
+
 /// In-memory state store inside `Compositor` holding TTL slots, metric series,
-/// toast notification queues, periodic command outputs, and foreground command timers.
+/// toast notification queues, dynamic overlays, and foreground command timers.
 pub(crate) struct TelemetryStore {
     pub wall_clock: DateTime<Local>,
     pub builtins: BuiltinValues,
@@ -48,8 +53,6 @@ pub(crate) struct TelemetryStore {
     pub ipc_slots: BTreeMap<String, SlotEntry>,
     pub metrics: BTreeMap<String, MetricSeries>,
     pub toasts: VecDeque<ToastEntry>,
-    pub command_outputs: BTreeMap<String, String>,
-    pub command_last_run: BTreeMap<String, Instant>,
     pub dynamic_overlays: BTreeMap<String, DynamicOverlayEntry>,
 }
 
@@ -62,8 +65,6 @@ impl TelemetryStore {
             ipc_slots: BTreeMap::new(),
             metrics: BTreeMap::new(),
             toasts: VecDeque::new(),
-            command_outputs: BTreeMap::new(),
-            command_last_run: BTreeMap::new(),
             dynamic_overlays: BTreeMap::new(),
         }
     }
@@ -72,11 +73,12 @@ impl TelemetryStore {
         &mut self,
         wall_clock: DateTime<Local>,
         builtins: BuiltinValues,
-        config: &Config,
         now: Instant,
-    ) -> Vec<(String, String)> {
-        let cwd_changed = self.builtins.cwd != builtins.cwd && builtins.cwd.is_some();
-        let cmd_finished = self.builtins.fg_process.is_some() && builtins.fg_process.is_none();
+    ) -> TickChanges {
+        let changes = TickChanges {
+            cwd_changed: self.builtins.cwd != builtins.cwd && builtins.cwd.is_some(),
+            cmd_finished: self.builtins.fg_process.is_some() && builtins.fg_process.is_none(),
+        };
 
         self.wall_clock = wall_clock;
         self.update_fg_telemetry(&builtins.fg_process, now);
@@ -88,20 +90,12 @@ impl TelemetryStore {
         }
         self.builtins = builtins;
         self.evict_expired(now);
-        self.collect_due_commands(config, now, cwd_changed, cmd_finished)
+        changes
     }
 
-    pub fn on_command_output(&mut self, id: String, output: &str) {
-        let trimmed = output.lines().next().unwrap_or("").trim().to_string();
-        if let Some(metric_key) = id.strip_prefix("__metric__:") {
-            let cleaned = trimmed.trim_end_matches('%').trim();
-            if let Ok(val) = cleaned.parse::<f64>() {
-                let clamped = val.round().clamp(0.0, 100.0) as u8;
-                self.push_metric_sample(metric_key.to_string(), clamped, None, None, false);
-            }
-        } else {
-            self.command_outputs.insert(id, trimmed);
-        }
+    /// Records a sample produced by a metric command.
+    pub fn push_metric(&mut self, key: String, value: u8) {
+        self.push_metric_sample(key, value, None, None, false);
     }
 
     fn push_metric_sample(
@@ -187,107 +181,6 @@ impl TelemetryStore {
         }
     }
 
-    pub fn collect_due_commands(
-        &mut self,
-        config: &Config,
-        now: Instant,
-        cwd_changed: bool,
-        cmd_finished: bool,
-    ) -> Vec<(String, String)> {
-        let mut specs = Vec::new();
-        for w in &config.status_bar.left {
-            specs.push(&w.kind);
-        }
-        for w in &config.status_bar.center {
-            specs.push(&w.kind);
-        }
-        for w in &config.status_bar.right {
-            specs.push(&w.kind);
-        }
-        for ov in &config.overlays {
-            for w in &ov.widgets {
-                specs.push(&w.kind);
-            }
-        }
-        for ov in self.dynamic_overlays.values() {
-            for w in &ov.config.widgets {
-                specs.push(&w.kind);
-            }
-        }
-
-        let current_cwd = self.builtins.cwd.as_deref();
-        let mut due = Vec::new();
-        for kind in specs {
-            match kind {
-                WidgetKind::Command {
-                    id,
-                    cmd,
-                    trigger,
-                    interval_ms,
-                    when_files,
-                } => {
-                    if !matches_when_files(current_cwd, when_files) {
-                        self.command_outputs.remove(id);
-                        self.command_last_run.remove(id);
-                        continue;
-                    }
-
-                    let effective_trigger = trigger.unwrap_or(if interval_ms.is_some() {
-                        CommandTrigger::Interval
-                    } else {
-                        CommandTrigger::Change
-                    });
-
-                    let is_due = match effective_trigger {
-                        CommandTrigger::Interval => {
-                            let interval = Duration::from_millis(interval_ms.unwrap_or(5000));
-                            match self.command_last_run.get(id) {
-                                None => true,
-                                Some(&last) => now.saturating_duration_since(last) >= interval,
-                            }
-                        }
-                        CommandTrigger::Cwd => {
-                            !self.command_last_run.contains_key(id) || cwd_changed
-                        }
-                        CommandTrigger::Change => {
-                            !self.command_last_run.contains_key(id) || cwd_changed || cmd_finished
-                        }
-                    };
-
-                    if is_due {
-                        self.command_last_run.insert(id.clone(), now);
-                        due.push((id.clone(), cmd.clone()));
-                    }
-                }
-                WidgetKind::Sparkline {
-                    key,
-                    cmd: Some(cmd),
-                    interval_ms,
-                    ..
-                }
-                | WidgetKind::Gauge {
-                    key,
-                    cmd: Some(cmd),
-                    interval_ms,
-                    ..
-                } => {
-                    let cmd_id = format!("__metric__:{key}");
-                    let interval = Duration::from_millis(interval_ms.unwrap_or(2000));
-                    let is_due = match self.command_last_run.get(&cmd_id) {
-                        None => true,
-                        Some(&last) => now.saturating_duration_since(last) >= interval,
-                    };
-                    if is_due {
-                        self.command_last_run.insert(cmd_id.clone(), now);
-                        due.push((cmd_id, cmd.clone()));
-                    }
-                }
-                _ => {}
-            }
-        }
-        due
-    }
-
     /// Resolves the `(fg, bg)` accent colors for a widget from `theme` when the user has not
     /// explicitly set `spec.style.fg` or `spec.style.bg`.
     fn resolve_widget_style(
@@ -322,6 +215,7 @@ impl TelemetryStore {
     /// Evaluates a single `WidgetSpec` into one or more styled `Line`s using `src/ui/` components.
     pub fn evaluate_widget_lines(
         &self,
+        commands: &CommandScheduler,
         spec: &WidgetSpec,
         fallback_style: CellStyle,
         theme: ThemeConfig,
@@ -399,7 +293,7 @@ impl TelemetryStore {
                     WidgetKind::GitBranch => self.builtins.git_branch.clone().unwrap_or_default(),
                     WidgetKind::Text { text } => text.clone(),
                     WidgetKind::Command { id, .. } => {
-                        self.command_outputs.get(id).cloned().unwrap_or_default()
+                        commands.output(id).unwrap_or_default().to_string()
                     }
                     WidgetKind::IpcSlot { key } => self
                         .ipc_slots
@@ -429,6 +323,7 @@ impl TelemetryStore {
     /// Concatenates a group of status bar `WidgetSpec`s into a single composite `Line` separated by `sep`.
     pub fn build_segment_line(
         &self,
+        commands: &CommandScheduler,
         specs: &[WidgetSpec],
         sep: &str,
         bar_style: CellStyle,
@@ -438,7 +333,7 @@ impl TelemetryStore {
         let mut out = Line::default();
         for spec in specs {
             let Some(first_line) = self
-                .evaluate_widget_lines(spec, bar_style, theme, true, now)
+                .evaluate_widget_lines(commands, spec, bar_style, theme, true, now)
                 .into_iter()
                 .next()
             else {
@@ -505,37 +400,6 @@ impl TelemetryStore {
         self.dynamic_overlays
             .retain(|_, entry| entry.expires_at.is_none_or(|exp| exp > now));
     }
-}
-
-pub(crate) fn expand_tilde_path(cwd: &str) -> PathBuf {
-    if cwd == "~" {
-        if let Ok(home) = std::env::var("HOME") {
-            return PathBuf::from(home);
-        }
-    } else if let Some(rest) = cwd.strip_prefix("~/")
-        && let Ok(home) = std::env::var("HOME")
-    {
-        return Path::new(&home).join(rest);
-    }
-    PathBuf::from(cwd)
-}
-
-fn matches_when_files(cwd: Option<&str>, when_files: &[String]) -> bool {
-    if when_files.is_empty() {
-        return true;
-    }
-    let Some(cwd_str) = cwd else {
-        return false;
-    };
-    let start_dir = expand_tilde_path(cwd_str);
-    for ancestor in start_dir.ancestors() {
-        for file_name in when_files {
-            if ancestor.join(file_name).exists() {
-                return true;
-            }
-        }
-    }
-    false
 }
 
 /// Suppress unused import warning when `Color` is used through `CellStyle`
