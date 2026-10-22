@@ -5,10 +5,10 @@ use std::fmt::Write as _;
 use unicode_width::UnicodeWidthChar;
 
 /// A single character cell in the 2D `Buffer`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Cell {
-    /// Text content of this cell (empty string if this cell is the 2nd column of a wide char).
-    pub ch: String,
+    /// Text content of this cell (' ' if blank, or space for the 2nd column of a wide char).
+    pub ch: char,
     /// Display width of this cell: `1` for normal, `2` for wide head cell, `0` for wide continuation cell.
     pub width: u8,
     pub style: CellStyle,
@@ -17,7 +17,7 @@ pub struct Cell {
 impl Default for Cell {
     fn default() -> Self {
         Self {
-            ch: " ".to_string(),
+            ch: ' ',
             width: 1,
             style: CellStyle::default(),
         }
@@ -34,7 +34,7 @@ pub struct CursorState {
 
 /// A 2D grid of styled terminal cells (`Cell`) that automatically heals split CJK 2-cell
 /// wide characters on overwrite and generates minimal ANSI SGR/CUP diffs.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Buffer {
     pub cols: u16,
     pub rows: u16,
@@ -69,6 +69,30 @@ impl Buffer {
         self.idx(row, col).map(|i| &self.cells[i])
     }
 
+    /// Resets all cells in the buffer to spaces with the given default style without reallocating memory.
+    pub fn clear(&mut self, style: CellStyle) {
+        let default_cell = Cell {
+            ch: ' ',
+            width: 1,
+            style,
+        };
+        self.cells.fill(default_cell);
+        self.cursor = CursorState::default();
+    }
+
+    /// Resizes the buffer to `(cols, rows)` in-place, reusing or expanding the cells vector.
+    pub fn resize(&mut self, cols: u16, rows: u16) {
+        if self.cols == cols && self.rows == rows {
+            return;
+        }
+        self.cols = cols;
+        self.rows = rows;
+        let len = usize::from(cols) * usize::from(rows);
+        self.cells.resize(len, Cell::default());
+        self.cells.fill(Cell::default());
+        self.cursor = CursorState::default();
+    }
+
     /// Fills a rectangular region with spaces of `style`.
     pub fn fill_rect(&mut self, rect: Rect, style: CellStyle) {
         let clipped = rect.intersection(self.area());
@@ -98,7 +122,7 @@ impl Buffer {
         {
             let bg_style = self.cells[left_idx].style;
             self.cells[left_idx] = Cell {
-                ch: " ".to_string(),
+                ch: ' ',
                 width: 1,
                 style: bg_style,
             };
@@ -112,7 +136,7 @@ impl Buffer {
         {
             let bg_style = self.cells[right_idx].style;
             self.cells[right_idx] = Cell {
-                ch: " ".to_string(),
+                ch: ' ',
                 width: 1,
                 style: bg_style,
             };
@@ -126,7 +150,7 @@ impl Buffer {
         {
             let bg_style = self.cells[after_idx].style;
             self.cells[after_idx] = Cell {
-                ch: " ".to_string(),
+                ch: ' ',
                 width: 1,
                 style: bg_style,
             };
@@ -140,7 +164,7 @@ impl Buffer {
             resolved_style.bg = blended_bg;
             resolved_style.fg = blended_fg;
             self.cells[idx] = Cell {
-                ch: c.to_string(),
+                ch: c,
                 width: char_width,
                 style: resolved_style,
             };
@@ -150,7 +174,7 @@ impl Buffer {
             && let Some(next_idx) = self.idx(row, col + 1)
         {
             self.cells[next_idx] = Cell {
-                ch: String::new(),
+                ch: ' ',
                 width: 0,
                 style: resolved_style,
             };
@@ -220,7 +244,7 @@ impl Buffer {
                 if let Some(cell) = self.get(r, c)
                     && cell.width > 0
                 {
-                    out.push_str(&cell.ch);
+                    out.push(cell.ch);
                 }
             }
         }
@@ -233,6 +257,7 @@ impl Buffer {
         let mut ansi = String::new();
         let mut any_cell_changed = false;
         let mut current_style: Option<CellStyle> = None;
+        let mut virtual_cursor: Option<(u16, u16)> = None;
 
         for r in 0..self.rows {
             let mut c = 0;
@@ -266,12 +291,15 @@ impl Buffer {
                         ansi.push_str("\x1b[?25l");
                         any_cell_changed = true;
                     }
-                    let _ = write!(ansi, "\x1b[{};{}H", r + 1, c + 1);
+                    if virtual_cursor != Some((r, c)) {
+                        let _ = write!(ansi, "\x1b[{};{}H", r + 1, c + 1);
+                    }
                     if current_style != Some(next_cell.style) {
                         Self::write_sgr(&mut ansi, next_cell.style);
                         current_style = Some(next_cell.style);
                     }
-                    ansi.push_str(&next_cell.ch);
+                    ansi.push(next_cell.ch);
+                    virtual_cursor = Some((r, c + u16::from(next_cell.width.max(1))));
                 }
 
                 c += u16::from(next_cell.width.max(1));

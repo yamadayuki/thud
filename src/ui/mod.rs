@@ -84,4 +84,23 @@ mod tests {
         );
         assert_eq!(buf.get(0, 0).unwrap().style.bg, Color::Rgb(100, 50, 25));
     }
+
+    #[test]
+    fn buffer_diff_tracks_cursor_run_length_and_omits_cup() {
+        let prev = Buffer::new(10, 2);
+        let mut buf = Buffer::new(10, 2);
+        buf.set_str(0, 0, "hello", CellStyle::default());
+        buf.set_str(1, 5, "world", CellStyle::default());
+
+        let diff_bytes = buf.diff(Some(&prev));
+        let diff_str = String::from_utf8(diff_bytes).unwrap();
+
+        // Must position at (1, 1) for "hello", but omit CUP between 'h', 'e', 'l', 'l', 'o'
+        assert!(diff_str.contains("\x1b[1;1H\x1b[0mhello"));
+        // Must position at (2, 6) for "world", but omit CUP between 'w', 'o', 'r', 'l', 'd'
+        assert!(diff_str.contains("\x1b[2;6Hworld"));
+        // Should NOT contain individual cell CUPs like \x1b[1;2H
+        assert!(!diff_str.contains("\x1b[1;2H"));
+        assert!(!diff_str.contains("\x1b[2;7H"));
+    }
 }

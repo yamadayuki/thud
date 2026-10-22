@@ -134,6 +134,10 @@ impl HeadlessHarness {
         if let Some(sz) = tx.child_pty_resize {
             self.last_child_size = sz;
         }
-        self.emitted_ansi.extend_from_slice(&tx.host_ansi_diff);
+        if !tx.host_ansi_diff.is_empty() {
+            self.emitted_ansi.extend_from_slice(&tx.host_ansi_diff);
+        } else if let Some(diff) = self.compositor.render(self.now) {
+            self.emitted_ansi.extend_from_slice(&diff);
+        }
     }
 }

@@ -174,7 +174,7 @@ impl PlacementSolver {
             for r in ov_row..(ov_row + ov_height).min(buf.rows) {
                 for c in ov_col..(ov_col + ov_width).min(buf.cols) {
                     if let Some(cell) = buf.get(r, c)
-                        && (cell.width == 0 || !cell.ch.trim().is_empty())
+                        && (cell.width == 0 || !cell.ch.is_whitespace())
                     {
                         return true;
                     }

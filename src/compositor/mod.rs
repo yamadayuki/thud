@@ -73,6 +73,9 @@ pub struct Compositor {
     vt: VtScreenAdapter,
     store: TelemetryStore,
     zen_mode: bool,
+    dirty: bool,
+    last_now: Instant,
+    current_buffer: Buffer,
     prev_buffer: Option<Buffer>,
 }
 
@@ -100,6 +103,9 @@ impl Compositor {
             vt,
             store,
             zen_mode: false,
+            dirty: false,
+            last_now: now,
+            current_buffer: Buffer::new(initial_host_size.cols, initial_host_size.rows),
             prev_buffer: None,
         };
 
@@ -120,6 +126,7 @@ impl Compositor {
     /// Entry point 2: Processes a single `Event` deterministically and returns the resulting `Transition`.
     /// This method is infallible.
     pub fn step(&mut self, event: Event<'_>, now: Instant) -> Transition {
+        self.last_now = now;
         let mut child_pty_input = Vec::new();
         let mut child_pty_resize = None;
         let mut due_commands = Vec::new();
@@ -204,6 +211,7 @@ impl Compositor {
                     self.host_size = clamped;
                     let new_child_size = self.child_size();
                     self.vt.set_size(new_child_size.cols, new_child_size.rows);
+                    self.current_buffer.resize(clamped.cols, clamped.rows);
                     self.prev_buffer = None;
                     child_pty_resize = Some(new_child_size);
                 }
@@ -239,9 +247,9 @@ impl Compositor {
             }
         }
 
-        let host_ansi_diff = self.compose_and_diff(now);
+        self.dirty = true;
         Transition {
-            host_ansi_diff,
+            host_ansi_diff: Vec::new(),
             child_pty_input,
             child_pty_resize,
             due_commands,
@@ -249,12 +257,31 @@ impl Compositor {
         }
     }
 
+    /// Returns true if the virtual terminal, telemetry store, or overlays have changed
+    /// since the last frame was rendered.
+    pub fn is_dirty(&self) -> bool {
+        self.dirty
+    }
+
+    /// Forces a full screen redraw and diff emission on next render.
+    pub fn mark_dirty(&mut self) {
+        self.dirty = true;
+    }
+
+    /// Renders the composited screen frame and generates minimal ANSI diff if dirty.
+    /// Resets `dirty` to false. Returns `None` if not dirty.
+    pub fn render(&mut self, now: Instant) -> Option<Vec<u8>> {
+        if !self.dirty {
+            return None;
+        }
+        let diff = self.compose_and_diff(now);
+        self.dirty = false;
+        Some(diff)
+    }
+
     /// Returns the current composited screen as plain text (one line per row, separated by `\n`).
     pub fn rendered_text(&self) -> String {
-        match &self.prev_buffer {
-            Some(buf) => buf.to_plain_text(),
-            None => self.build_buffer(Instant::now()).to_plain_text(),
-        }
+        self.build_buffer(self.last_now).to_plain_text()
     }
 
     /// Returns the child PTY dimensions calculated for the current host terminal size and Zen Mode state.
@@ -268,23 +295,43 @@ impl Compositor {
     }
 
     fn compose_and_diff(&mut self, now: Instant) -> Vec<u8> {
-        let next = self.build_buffer(now);
-        let diff = next.diff(self.prev_buffer.as_ref());
-        self.prev_buffer = Some(next);
+        let mut buf = std::mem::take(&mut self.current_buffer);
+        buf.clear(CellStyle::default());
+        self.paint_frame(&mut buf, now);
+        let diff = buf.diff(self.prev_buffer.as_ref());
+        match self.prev_buffer {
+            Some(ref mut prev) => {
+                if prev.cols == buf.cols && prev.rows == buf.rows {
+                    prev.cells.copy_from_slice(&buf.cells);
+                    prev.cursor = buf.cursor;
+                } else {
+                    *prev = buf.clone();
+                }
+            }
+            None => {
+                self.prev_buffer = Some(buf.clone());
+            }
+        }
+        self.current_buffer = buf;
         diff
     }
 
     fn build_buffer(&self, now: Instant) -> Buffer {
         let mut buf = Buffer::new(self.host_size.cols, self.host_size.rows);
+        self.paint_frame(&mut buf, now);
+        buf
+    }
+
+    fn paint_frame(&self, buf: &mut Buffer, now: Instant) {
         let child_rect =
             PlacementSolver::compute_child_rect(self.host_size, &self.config, self.zen_mode);
         let palette = self.config.theme.palette();
 
         // 1. Project child virtual terminal screen cells & cursor into `buf`
-        self.vt.paint_into_buffer(child_rect, &mut buf);
+        self.vt.paint_into_buffer(child_rect, buf);
 
         if self.zen_mode {
-            return buf;
+            return;
         }
 
         // 2. Render docked top or bottom status bar if enabled and terminal is tall enough
@@ -325,10 +372,7 @@ impl Compositor {
                     now,
                 ),
             };
-            bar.render(
-                Rect::new(0, status_row, self.host_size.cols, reserved),
-                &mut buf,
-            );
+            bar.render(Rect::new(0, status_row, self.host_size.cols, reserved), buf);
         }
 
         // 3. Render floating overlays sorted by z_index
@@ -340,13 +384,11 @@ impl Compositor {
 
         let is_alt = self.vt.is_alternate_screen();
         for ov in overlays {
-            self.render_overlay(&mut buf, ov, child_rect, is_alt, now);
+            self.render_overlay(buf, ov, child_rect, is_alt, now);
         }
 
         // 4. Render stacked toast notifications and unreferenced progress gauges
-        self.render_toast_stack(&mut buf, child_rect);
-
-        buf
+        self.render_toast_stack(buf, child_rect);
     }
 
     fn render_overlay(
@@ -578,7 +620,7 @@ mod tests {
                 "hello world    14:30\n",
                 "                    \n",
                 "                    \n",
-                "~/thud | NORM      R1"
+                "~/thud | NORM     R1"
             )
         );
     }
@@ -1100,5 +1142,29 @@ mod tests {
         comp.step(Event::PtyOutput(b"\x1b[?1000h\x1b[?1006h"), now);
         let tx_vim = comp.step(Event::HostInput(b"\x1b[<0;15;4M"), now);
         assert_eq!(tx_vim.child_pty_input, b"\x1b[<0;15;4M");
+    }
+
+    #[test]
+    fn pty_ingestion_decoupled_from_render_and_dirty_flag_lifecycle() {
+        let now = Instant::now();
+        let cfg = Config::default();
+        let (mut comp, _) = Compositor::new(TermSize { cols: 40, rows: 10 }, cfg, now).unwrap();
+
+        // After initialization, compositor starts clean
+        assert!(!comp.is_dirty());
+        assert!(comp.render(now).is_none());
+
+        // Ingesting PTY output marks dirty but does not emit host_ansi_diff in Transition
+        let tx = comp.step(Event::PtyOutput(b"streamed log chunk"), now);
+        assert!(tx.host_ansi_diff.is_empty());
+        assert!(comp.is_dirty());
+
+        // Dedicated render call generates diff and clears dirty flag
+        let diff = comp.render(now);
+        assert!(diff.is_some());
+        assert!(!comp.is_dirty());
+
+        // Subsequent render call without events returns None (no wasted composition)
+        assert!(comp.render(now).is_none());
     }
 }

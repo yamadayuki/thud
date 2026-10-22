@@ -2,16 +2,39 @@ use crate::compositor::BuiltinValues;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, Receiver};
+use std::thread;
 use std::time::{Duration, Instant};
 
 /// Stateful OS telemetry collector that caches battery status, tracks CPU tick deltas,
 /// and samples foreground process CWD, Git branch, and command name into `BuiltinValues`.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(crate) struct SystemProbes {
+    last_raw_cwd: Option<PathBuf>,
+    cached_git_branch: Option<String>,
     cached_battery: Option<u8>,
     last_battery_probe: Option<Instant>,
+    battery_in_flight: Arc<AtomicBool>,
+    battery_rx: Option<Receiver<Option<u8>>>,
     prev_cpu_ticks: Option<[u64; 4]>,
     last_cpu_probe: Option<Instant>,
+}
+
+impl Default for SystemProbes {
+    fn default() -> Self {
+        Self {
+            last_raw_cwd: None,
+            cached_git_branch: None,
+            cached_battery: None,
+            last_battery_probe: None,
+            battery_in_flight: Arc::new(AtomicBool::new(false)),
+            battery_rx: None,
+            prev_cpu_ticks: None,
+            last_cpu_probe: None,
+        }
+    }
 }
 
 impl SystemProbes {
@@ -42,7 +65,13 @@ impl SystemProbes {
         };
 
         let raw_cwd = read_process_cwd(fg_pid).or_else(|| read_process_cwd(child_pid));
-        let git_branch = raw_cwd.as_deref().and_then(resolve_git_branch);
+        let git_branch = if raw_cwd != self.last_raw_cwd {
+            self.cached_git_branch = raw_cwd.as_deref().and_then(resolve_git_branch);
+            self.last_raw_cwd = raw_cwd.clone();
+            self.cached_git_branch.clone()
+        } else {
+            self.cached_git_branch.clone()
+        };
         let cwd = raw_cwd.map(|p| shorten_home(&p));
         let fg_process = if fg_pid != child_pid {
             read_process_name(fg_pid)
@@ -50,12 +79,27 @@ impl SystemProbes {
             None
         };
 
+        // Drain any async battery sample from the background worker thread
+        if let Some(ref rx) = self.battery_rx {
+            while let Ok(val) = rx.try_recv() {
+                self.cached_battery = val;
+            }
+        }
+
         let should_refresh_battery = self
             .last_battery_probe
             .is_none_or(|last| now.saturating_duration_since(last) >= Duration::from_secs(30));
-        if should_refresh_battery {
+        if should_refresh_battery && !self.battery_in_flight.load(Ordering::Relaxed) {
             self.last_battery_probe = Some(now);
-            self.cached_battery = probe_battery();
+            self.battery_in_flight.store(true, Ordering::Relaxed);
+            let in_flight = Arc::clone(&self.battery_in_flight);
+            let (tx, rx) = mpsc::channel();
+            self.battery_rx = Some(rx);
+            thread::spawn(move || {
+                let batt = probe_battery();
+                let _ = tx.send(batt);
+                in_flight.store(false, Ordering::Relaxed);
+            });
         }
 
         let cpu_usage = self.sample_cpu(now);
@@ -301,5 +345,23 @@ fn probe_battery() -> Option<u8> {
         let cap = fs::read_to_string("/sys/class/power_supply/BAT0/capacity").ok()?;
         let pct = cap.trim().parse::<u8>().ok()?;
         Some(pct.min(100))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn git_branch_resolution_is_memoized_when_cwd_is_unchanged() {
+        let mut probes = SystemProbes::new();
+        let cwd = std::env::current_dir().unwrap();
+
+        // Prime the cache
+        probes.last_raw_cwd = Some(cwd.clone());
+        probes.cached_git_branch = Some("git:main".to_string());
+
+        assert_eq!(probes.cached_git_branch.as_deref(), Some("git:main"));
+        assert_eq!(probes.last_raw_cwd.as_ref(), Some(&cwd));
     }
 }

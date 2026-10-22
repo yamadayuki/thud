@@ -110,6 +110,14 @@ impl Session {
         );
         Self::apply_os_transition(&first_tick_tx, &mut host, &mut pty, &cmd_tx)?;
 
+        const FRAME_INTERVAL: Duration = Duration::from_micros(6944); // ~144 FPS
+        let mut last_frame = now;
+
+        if let Some(diff) = compositor.render(now) {
+            host.write_diff(&diff)?;
+            last_frame = now;
+        }
+
         let mut buf = [0u8; 8192];
         let exit_code = loop {
             if let Some(code) = pty.try_wait()? {
@@ -123,7 +131,22 @@ impl Session {
                 Self::apply_os_transition(&tx, &mut host, &mut pty, &cmd_tx)?;
             }
 
-            // Poll stdin and child PTY master fd with a short timeout (50ms)
+            // Dynamic poll timeout:
+            // When dirty, wait only the remaining time until the next 144 FPS frame is due (0..=7ms)
+            // When clean, wait up to 50ms for I/O.
+            let poll_now = Instant::now();
+            let poll_timeout_ms: libc::c_int = if compositor.is_dirty() {
+                let elapsed = poll_now.saturating_duration_since(last_frame);
+                if elapsed >= FRAME_INTERVAL {
+                    0
+                } else {
+                    let rem = FRAME_INTERVAL - elapsed;
+                    (rem.as_millis() as libc::c_int).max(1)
+                }
+            } else {
+                50
+            };
+
             let mut fds = [
                 libc::pollfd {
                     fd: host.tty_fd(),
@@ -137,7 +160,7 @@ impl Session {
                 },
             ];
 
-            let poll_res = unsafe { libc::poll(fds.as_mut_ptr(), 2, 50) };
+            let poll_res = unsafe { libc::poll(fds.as_mut_ptr(), 2, poll_timeout_ms) };
             let loop_now = Instant::now();
 
             if poll_res > 0 {
@@ -162,6 +185,11 @@ impl Session {
                                 &cmd_tx,
                                 loop_now,
                             )?;
+                        }
+                        // Immediate flush for interactive user typing: 0ms latency
+                        if let Some(diff) = compositor.render(loop_now) {
+                            host.write_diff(&diff)?;
+                            last_frame = loop_now;
                         }
                     }
                 }
@@ -240,6 +268,15 @@ impl Session {
                 );
                 Self::apply_os_transition(&tx, &mut host, &mut pty, &cmd_tx)?;
             }
+
+            // 6. Frame pacing render (up to 144 FPS)
+            if compositor.is_dirty()
+                && loop_now.saturating_duration_since(last_frame) >= FRAME_INTERVAL
+                && let Some(diff) = compositor.render(loop_now)
+            {
+                host.write_diff(&diff)?;
+                last_frame = loop_now;
+            }
         };
 
         Ok(exit_code)
@@ -293,7 +330,11 @@ impl Session {
                 )
             }
         };
-        Self::apply_os_transition(&tx, host, pty, cmd_tx)
+        Self::apply_os_transition(&tx, host, pty, cmd_tx)?;
+        if let Some(diff) = compositor.render(now) {
+            host.write_diff(&diff)?;
+        }
+        Ok(())
     }
 
     fn apply_os_transition(
@@ -397,7 +438,7 @@ mod tests {
                 "-- VIM BUFFER --           14:25\n",
                 "                                \n",
                 "                                \n",
-                "~/thud | git:main | NORMAL  UP:5d"
+                "~/thud | git:main | NORMAL UP:5d"
             )
         );
     }
