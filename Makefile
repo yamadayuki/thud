@@ -9,7 +9,9 @@ all: validate
 validate:
 	@$(OKF_BIN) validate $(BUNDLE) --strict --drift
 
+## test: Run Rust unit + Outer-PTY E2E tests and OKF bundle validation
 test: validate
+	@cargo test
 
 ## search: Search project memory (e.g. make search q="auth")
 search:
