@@ -3,7 +3,7 @@ type: Requirement
 title: "Core Terminal HUD & Compositor Requirements"
 description: "Terminal-emulator-agnostic and shell-agnostic HUD providing bottom status lines, floating top-right overlays, and multi-source widgets."
 tags: [terminal, pty, hud, overlay, ipc, widgets]
-generated: { by: antigravity/gemini-4, at: "2026-10-22T09:44:46Z" }
+generated: { by: antigravity/gemini-4, at: "2026-10-22T10:11:09Z" }
 status: stable
 ---
 
@@ -22,8 +22,11 @@ status: stable
    - Supports semantic colors (named colors like `"cyan"`, hex RGB like `"#89b4fa"`, or ANSI 256 numbers), built-in `theme` presets (`default`, `tokyo_night`, `catppuccin`, `cyberpunk`, `nord`, `gruvbox`), per-widget `icon`, `pill` (Nerd Font `...` capsules), `padding`, `track_fg`, and multi-widget bordered `[[overlays]]` (`widgets = [...]`, `border_fg`, `title_fg`, `padding_x`).
    - Composites floating overlays non-destructively with cursor and non-whitespace text collision dodging (`DodgeToOppositeCorner` / `AutoHide`) and CJK 2-cell wide character boundary healing.
 3. **Widget, Telemetry & IPC Channels**:
-   - **Built-in & Telemetry Widgets**: Clock, battery, CWD, Git branch, and foreground process duration telemetry (`active_command` showing `⚙ <cmd> (<secs>s)` when running >= `min_secs`).
-   - **Periodic Shell Command Widgets**: Asynchronous `sh -c ...` execution on configurable intervals.
+   - **Built-in & Telemetry Widgets**: Clock, battery, CWD, Git branch, system CPU load (`key = "cpu"`), and foreground process duration telemetry (`active_command` showing `⚙ <cmd> (<secs>s)` when running >= `min_secs`).
+   - **Event-Driven & Periodic Shell Command Widgets (`type = "command"`)**:
+     - Supports `trigger = "change"` (default when `interval_ms` is omitted: runs on CWD change and foreground command completion), `trigger = "cwd"` (runs only on CWD change), and `trigger = "interval"` (runs every `interval_ms`).
+     - Supports `when_files = ["package.json", ".node-version", ".nvmrc"]` ancestor file detection so project-specific runtime versions (e.g. `node -v`, `rustc -V`) are only executed and displayed when inside a matching project directory.
+     - Executes commands asynchronously with `current_dir` set to the child shell's active CWD.
    - **Metrics, Progress Bars & Stacked Toast Queue via Unix Domain Socket**:
      - `thud set` / `thud clear` for named status slots with optional TTL.
      - `thud progress <key> <0..100|done> [--label <txt>]` feeding `sparkline` (`▁▂▃▄▅▆▇█`) and `gauge` (`━━━─── 60%`) widgets.
