@@ -342,22 +342,169 @@ impl Config {
         Self::from_toml(&content)
     }
 
+    /// Returns the default configuration file path (`$CTH_CONFIG` if set, otherwise `~/.config/cth/config.toml`).
+    pub fn default_path() -> Option<PathBuf> {
+        if let Ok(custom_path) = std::env::var("CTH_CONFIG")
+            && !custom_path.is_empty()
+        {
+            return Some(PathBuf::from(custom_path));
+        }
+        std::env::var("HOME")
+            .ok()
+            .map(|home| PathBuf::from(home).join(".config/cth/config.toml"))
+    }
+
     /// Loads configuration from `$CTH_CONFIG` or `~/.config/cth/config.toml` if present,
     /// falling back to `Config::default()`.
     pub fn load_or_default() -> Result<Self, ConfigError> {
-        if let Ok(custom_path) = std::env::var("CTH_CONFIG") {
-            let p = PathBuf::from(custom_path);
-            if p.exists() {
-                return Self::from_file(p);
-            }
-        }
-        if let Ok(home) = std::env::var("HOME") {
-            let default_path = PathBuf::from(home).join(".config/cth/config.toml");
-            if default_path.exists() {
-                return Self::from_file(default_path);
-            }
+        if let Some(path) = Self::default_path()
+            && path.exists()
+        {
+            return Self::from_file(path);
         }
         Ok(Self::default())
+    }
+
+    /// Writes the annotated default configuration TOML to `target_path` (or `Self::default_path()`).
+    /// Fails if the file already exists unless `force` is `true`.
+    pub fn write_default_file(
+        target_path: Option<PathBuf>,
+        force: bool,
+    ) -> Result<PathBuf, ConfigError> {
+        let path = target_path.or_else(Self::default_path).ok_or_else(|| {
+            ConfigError::Io("could not determine default config path ($HOME is not set)".to_string())
+        })?;
+
+        if path.exists() && !force {
+            return Err(ConfigError::Io(format!(
+                "config file already exists at '{}' (use --force to overwrite)",
+                path.display()
+            )));
+        }
+
+        if let Some(parent) = path.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            fs::create_dir_all(parent).map_err(|e| ConfigError::Io(e.to_string()))?;
+        }
+
+        fs::write(&path, Self::annotated_default_toml())
+            .map_err(|e| ConfigError::Io(e.to_string()))?;
+        Ok(path)
+    }
+
+    /// Returns a self-documenting TOML configuration string containing all default values,
+    /// available options, widget types, and CLI/IPC usage examples.
+    pub fn annotated_default_toml() -> &'static str {
+        r#"# =============================================================================
+# cth - Terminal HUD & Compositor Configuration
+# Default path: ~/.config/cth/config.toml (or override via $CTH_CONFIG / --config)
+# =============================================================================
+
+# Optional: Shell executable to spawn inside the PTY.
+# Defaults to $SHELL (or "/bin/sh" if $SHELL is unset).
+# shell = "/opt/homebrew/bin/fish"
+
+# Optional: Custom Unix domain socket path for IPC commands (`cth set`, `cth toast`, etc.).
+# Defaults to "/tmp/cth-<pid>.sock" and is exported as $CTH_SOCKET inside the session.
+# ipc_socket = "/tmp/cth.sock"
+
+# -----------------------------------------------------------------------------
+# Docked Bottom Status Bar (Vim-like status line)
+# Reserves `height` row(s) at the bottom of the terminal so child applications
+# (including fullscreen TUI apps like vim, htop, fzf, less) never overwrite it.
+# -----------------------------------------------------------------------------
+[status_bar]
+enabled = true
+height = 1
+separator = " │ "
+# 256-color ANSI palette index (0-255): 255 = bright white, 236 = dark charcoal
+fg_ansi = 255
+bg_ansi = 236
+
+# Widgets placed on the left side of the status bar.
+# Available widget types (`type = ...`):
+#   1. { type = "cwd" }
+#      -> Current working directory of the foreground process (e.g. "~/dev/cth")
+#   2. { type = "git_branch" }
+#      -> Current Git branch or short commit SHA (e.g. "git:main")
+#   3. { type = "battery" }
+#      -> System battery level (e.g. "BAT 100%")
+#   4. { type = "clock", format = "%Y-%m-%d %H:%M:%S" }
+#      -> Local time formatted with strftime syntax (default: "%H:%M:%S")
+#   5. { type = "text", text = "PROD" }
+#      -> Static label string
+#   6. { type = "command", id = "k8s", cmd = "kubectl config current-context", interval_ms = 5000 }
+#      -> Periodic non-blocking `sh -c` command output refreshed every `interval_ms`
+#   7. { type = "ipc_slot", key = "status" }
+#      -> Dynamic slot updated from shell hooks or external scripts via:
+#         `cth set status "BUILDING..." --ttl-ms 5000`
+#         `cth clear status`
+left = [
+    { type = "cwd" },
+    { type = "git_branch" },
+    { type = "ipc_slot", key = "status" },
+]
+
+# Widgets placed in the center of the status bar.
+center = []
+
+# Widgets placed on the right side of the status bar.
+right = [
+    { type = "battery" },
+]
+
+# -----------------------------------------------------------------------------
+# Floating Overlays (Non-destructive HUD layers composited over the terminal)
+# Overlays do not shrink the child PTY or mutate its screen buffer; when moved
+# or hidden, the underlying terminal characters (including wide CJK chars) are
+# restored automatically.
+# -----------------------------------------------------------------------------
+[[overlays]]
+id = "clock"
+
+# Anchor position on the child terminal viewport:
+#   "top_right" | "top_left" | "top_center" | "bottom_right" | "bottom_left" | "bottom_center"
+anchor = "top_right"
+
+# Fine-grained cell offset from the anchor position.
+offset_x = 0
+offset_y = 0
+
+# Drawing order when multiple overlays exist (higher z_index renders on top).
+z_index = 10
+
+# Which screen buffer mode this overlay is visible in:
+#   "always"         -> Both normal shell and fullscreen TUI apps (vim, htop, less)
+#   "primary_only"   -> Only normal shell screen; hidden during fullscreen TUI apps
+#   "alternate_only" -> Only during fullscreen TUI apps
+screen_mode = "always"
+
+# 256-color ANSI palette index (0-255) and text weight
+fg_ansi = 231
+bg_ansi = 238
+bold = true
+
+# Optional: Time-to-live in milliseconds (mainly used for temporary IPC overlays/toasts).
+# ttl_ms = 4000
+
+# Behavior when the child cursor or terminal text reaches the overlay region:
+#   1. { mode = "dodge_to_opposite_corner", margin = 1, avoid_text = true }
+#      -> Moves to an unoccupied corner or slides down along the edge when the cursor
+#         approaches within `margin` cells or when underlying text is present.
+#   2. { mode = "auto_hide", margin = 1, avoid_text = true }
+#      -> Temporarily hides while the cursor or text overlaps the overlay.
+#   3. { mode = "ignore" }
+#      -> Always renders at the fixed anchor position.
+[overlays.collision]
+mode = "dodge_to_opposite_corner"
+margin = 1
+avoid_text = true
+
+[overlays.widget]
+type = "clock"
+format = " %H:%M:%S "
+"#
     }
 
     /// Reserved bottom rows for the docked status bar.
@@ -442,6 +589,35 @@ mod tests {
                 ttl_ms: Some(3000),
             }
         );
+    }
+
+    #[test]
+    fn annotated_default_toml_parses_to_exact_default_config() {
+        let parsed = Config::from_toml(Config::annotated_default_toml())
+            .expect("annotated_default_toml must be valid TOML");
+        assert_eq!(parsed, Config::default());
+    }
+
+    #[test]
+    fn write_default_file_creates_and_protects_existing_file_unless_forced() {
+        let temp_path =
+            std::env::temp_dir().join(format!("cth-config-test-{}.toml", std::process::id()));
+        let _ = fs::remove_file(&temp_path);
+
+        let written = Config::write_default_file(Some(temp_path.clone()), false).unwrap();
+        assert_eq!(written, temp_path);
+        assert_eq!(
+            Config::from_file(&temp_path).unwrap(),
+            Config::default()
+        );
+
+        // Second write without `force` must fail
+        assert!(Config::write_default_file(Some(temp_path.clone()), false).is_err());
+
+        // Second write with `force = true` must succeed
+        assert!(Config::write_default_file(Some(temp_path.clone()), true).is_ok());
+
+        let _ = fs::remove_file(&temp_path);
     }
 }
 

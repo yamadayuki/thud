@@ -73,11 +73,14 @@ fn try_main() -> Result<(), SessionError> {
             let (_, socket) = parse_ipc_flags(&args[1..])?;
             Session::send_ipc_message(socket, &IpcMessage::Quit)
         }
+        Some("init-config") => {
+            let (output_path, force) = parse_init_config_flags(&args[1..]);
+            let written_path = Config::write_default_file(output_path, force)?;
+            println!("Wrote annotated default config to {}", written_path.display());
+            Ok(())
+        }
         Some("print-default-config") => {
-            let default_cfg = Config::default();
-            let serialized =
-                toml::to_string_pretty(&default_cfg).expect("default config serializes to TOML");
-            print!("{serialized}");
+            print!("{}", Config::annotated_default_toml());
             Ok(())
         }
         Some("--help" | "-h" | "help") => {
@@ -160,6 +163,31 @@ fn parse_ipc_flags(args: &[String]) -> Result<(Option<u64>, Option<PathBuf>), Se
     Ok((ttl_ms, socket))
 }
 
+fn parse_init_config_flags(args: &[String]) -> (Option<PathBuf>, bool) {
+    let mut output_path = None;
+    let mut force = false;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--output" | "-o" | "--config" | "-c" => {
+                i += 1;
+                if let Some(p) = args.get(i) {
+                    output_path = Some(PathBuf::from(p));
+                }
+            }
+            "--force" | "-f" => {
+                force = true;
+            }
+            path if !path.starts_with('-') && output_path.is_none() => {
+                output_path = Some(PathBuf::from(path));
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    (output_path, force)
+}
+
 fn print_help() {
     println!(
         "\
@@ -167,10 +195,11 @@ cth - Terminal-emulator-agnostic & shell-agnostic HUD compositor
 
 USAGE:
   cth [run] [--config <path>] [--shell <shell>]   Start interactive terminal HUD session
+  cth init-config [--output <path>] [--force]     Write annotated config file (default: ~/.config/cth/config.toml)
+  cth print-default-config                        Print annotated default TOML configuration to stdout
   cth set <key> <value> [--ttl-ms <ms>]           Update an IPC status slot in the active session
   cth clear <key>                                 Clear an IPC status slot
   cth toast <message> [--ttl-ms <ms>]             Show a floating toast notification overlay
-  cth quit                                        Gracefully exit the active cth session
-  cth print-default-config                        Print the default TOML configuration"
+  cth quit                                        Gracefully exit the active cth session"
     );
 }
