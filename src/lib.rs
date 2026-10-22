@@ -7,7 +7,7 @@ pub use compositor::{BuiltinValues, Compositor, Event, Transition};
 pub use config::{
     Anchor, BorderStyle, CellStyle, CollisionPolicy, Color, CommandTrigger, Config, ConfigError,
     IpcMessage, OverlayConfig, ScreenCondition, SegmentFormat, StatusBarConfig, TermSize,
-    ThemeConfig, ThemePalette, ThemePreset, ToastLevel, WidgetKind, WidgetSpec,
+    ThemeConfig, ThemePalette, ThemePreset, ToastConfig, ToastLevel, WidgetKind, WidgetSpec,
 };
 pub use session::{HeadlessHarness, Session, SessionError};
 pub use ui::{

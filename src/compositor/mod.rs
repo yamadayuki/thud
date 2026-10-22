@@ -5,7 +5,9 @@ pub(crate) mod vt;
 use crate::compositor::layout::PlacementSolver;
 use crate::compositor::store::TelemetryStore;
 use crate::compositor::vt::VtScreenAdapter;
-use crate::config::{Config, ConfigError, IpcMessage, OverlayConfig, ScreenCondition, TermSize};
+use crate::config::{
+    Anchor, Color, Config, ConfigError, IpcMessage, OverlayConfig, ScreenCondition, TermSize,
+};
 use crate::ui::{Block, Buffer, CellStyle, Gauge, Line, Rect, StatusBar, Toast, Widget};
 use chrono::{DateTime, Local};
 use std::time::Instant;
@@ -334,13 +336,10 @@ impl Compositor {
     }
 
     fn render_toast_stack(&self, buf: &mut Buffer, child_size: TermSize) {
-        let mut current_row = i32::from(child_size.rows) - 1;
+        let mut items: Vec<(Line, CellStyle)> = Vec::new();
 
-        // 1. Render any active unreferenced IPC progress metrics (`thud progress <key> <pct>`)
+        // 1. Collect any active unreferenced IPC progress metrics (`thud progress <key> <pct>`)
         for (key, series) in &self.store.metrics {
-            if current_row < 0 {
-                break;
-            }
             if !series.from_ipc || self.store.is_metric_referenced(&self.config, key) {
                 continue;
             }
@@ -349,20 +348,11 @@ impl Compositor {
             let line = Gauge::new(series.latest, 10, Some(label), style)
                 .to_line()
                 .with_affixes(Some(" "), Some(" "), style);
-            let width = line.width();
-            if width == 0 || width > child_size.cols {
-                continue;
-            }
-            let col = child_size.cols - width;
-            (&line).render(Rect::new(col, current_row as u16, width, 1), buf);
-            current_row -= 1;
+            items.push((line, style));
         }
 
-        // 2. Render stacked toast notifications
+        // 2. Collect stacked toast notifications
         for toast_entry in self.store.toasts.iter().rev() {
-            if current_row < 0 {
-                break;
-            }
             let (fg_ansi, bg_ansi, icon) = toast_entry.level.palette();
             let style = CellStyle::ansi(fg_ansi, bg_ansi, true);
             let line = Toast {
@@ -371,13 +361,64 @@ impl Compositor {
                 style,
             }
             .to_line();
-            let width = line.width();
-            if width == 0 || width > child_size.cols {
+            items.push((line, style));
+        }
+
+        if items.is_empty() {
+            return;
+        }
+
+        let toast_cfg = self.config.toast;
+        let is_top = matches!(
+            toast_cfg.anchor,
+            Anchor::TopRight | Anchor::TopLeft | Anchor::TopCenter
+        );
+        let mut current_row = if is_top {
+            i32::from(toast_cfg.margin_y)
+        } else {
+            i32::from(child_size.rows) - 1 - i32::from(toast_cfg.margin_y)
+        };
+
+        for (mut line, style) in items {
+            if toast_cfg.pill {
+                line = line.decorate_segment(None, false, true, None, None, style, Color::Default);
+            }
+
+            let block = Block::new(toast_cfg.border, None, style, vec![line]);
+            let (box_w, box_h) = block.measure();
+            if box_w == 0 || box_h == 0 || box_w > child_size.cols {
                 continue;
             }
-            let col = child_size.cols - width;
-            (&line).render(Rect::new(col, current_row as u16, width, 1), buf);
-            current_row -= 1;
+
+            let top_row = if is_top {
+                current_row
+            } else {
+                current_row - i32::from(box_h) + 1
+            };
+            if top_row < 0 || top_row + i32::from(box_h) > i32::from(child_size.rows) {
+                break;
+            }
+
+            let col = match toast_cfg.anchor {
+                Anchor::TopRight | Anchor::BottomRight => child_size
+                    .cols
+                    .saturating_sub(box_w.saturating_add(toast_cfg.margin_x)),
+                Anchor::TopLeft | Anchor::BottomLeft => toast_cfg
+                    .margin_x
+                    .min(child_size.cols.saturating_sub(box_w)),
+                Anchor::TopCenter | Anchor::BottomCenter => {
+                    child_size.cols.saturating_sub(box_w) / 2
+                }
+            };
+
+            block.render(Rect::new(col, top_row as u16, box_w, box_h), buf);
+
+            let step = i32::from(box_h.saturating_add(toast_cfg.gap));
+            if is_top {
+                current_row += step;
+            } else {
+                current_row -= step;
+            }
         }
     }
 }
@@ -627,7 +668,7 @@ mod tests {
         )
         .unwrap();
 
-        let (mut comp, _) = Compositor::new(TermSize { cols: 24, rows: 7 }, cfg, now).unwrap();
+        let (mut comp, _) = Compositor::new(TermSize { cols: 24, rows: 8 }, cfg, now).unwrap();
 
         comp.step(
             Event::Ipc(IpcMessage::PushMetric {
@@ -680,11 +721,13 @@ mod tests {
         assert_eq!(lines[1], "                   │OK │");
         assert_eq!(lines[2], "                   │UP │");
         assert_eq!(lines[3], "                   ╰───╯");
-        // Stacked toasts at bottom-right of child area (rows 4 and 5)
-        assert!(lines[4].ends_with(" ℹ T1 "));
-        assert!(lines[5].ends_with(" ✓ T2 "));
-        // Bottom status bar with sparkline & gauge
-        assert!(lines[6].contains("▁▁▁█ B ━━── 50%"));
+        // Default toast margins: margin_x = 2 (2 spaces on right), margin_y = 1 (row 6 left empty above status bar!)
+        // so stacked toasts float at rows 4 and 5 with 2 trailing spaces!
+        assert!(lines[4].ends_with(" ℹ T1   "));
+        assert!(lines[5].ends_with(" ✓ T2   "));
+        assert_eq!(lines[6].trim(), "");
+        // Bottom status bar with sparkline & 3-char left-padded gauge percentage (` 50%`)
+        assert!(lines[7].contains("▁▁▁█ B ━━──  50%"));
     }
 
     #[test]
@@ -789,7 +832,7 @@ mod tests {
         let rendered = comp.rendered_text();
         let last_line = rendered.lines().last().unwrap();
         assert!(last_line.contains(" CPU ▁▁▁▁▁▁▁▄ "));
-        assert!(last_line.contains("━━━─ 75%"));
+        assert!(last_line.contains("━━━─  75%"));
     }
 
     #[test]

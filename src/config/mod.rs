@@ -289,6 +289,48 @@ pub struct OverlayConfig {
     pub ttl_ms: Option<u64>,
 }
 
+/// Floating toast & progress notification stack configuration (`[toast]`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ToastConfig {
+    #[serde(default = "default_toast_anchor")]
+    pub anchor: Anchor,
+    #[serde(default = "default_toast_margin_x")]
+    pub margin_x: u16,
+    #[serde(default = "default_toast_margin_y")]
+    pub margin_y: u16,
+    #[serde(default)]
+    pub gap: u16,
+    #[serde(default)]
+    pub pill: bool,
+    #[serde(default)]
+    pub border: BorderStyle,
+}
+
+fn default_toast_anchor() -> Anchor {
+    Anchor::BottomRight
+}
+
+fn default_toast_margin_x() -> u16 {
+    2
+}
+
+fn default_toast_margin_y() -> u16 {
+    1
+}
+
+impl Default for ToastConfig {
+    fn default() -> Self {
+        Self {
+            anchor: default_toast_anchor(),
+            margin_x: default_toast_margin_x(),
+            margin_y: default_toast_margin_y(),
+            gap: 0,
+            pill: false,
+            border: BorderStyle::None,
+        }
+    }
+}
+
 /// Top-level declarative configuration for a `thud` session.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Config {
@@ -304,6 +346,8 @@ pub struct Config {
     pub dashboard_toggle_key: Option<String>,
     #[serde(default)]
     pub status_bar: StatusBarConfig,
+    #[serde(default)]
+    pub toast: ToastConfig,
     #[serde(default = "default_overlays")]
     pub overlays: Vec<OverlayConfig>,
 }
@@ -352,6 +396,7 @@ impl Default for Config {
             zen_toggle_key: default_zen_toggle_key(),
             dashboard_toggle_key: default_dashboard_toggle_key(),
             status_bar: StatusBarConfig::default(),
+            toast: ToastConfig::default(),
             overlays: default_overlays(),
         }
     }
@@ -574,7 +619,14 @@ mod tests {
             bar_bg = "transparent"
             overlay_bg = "#1e1e2e@0.75"
             cwd_bg = "#89b4fa"
-            battery_bg = "#a6e3a1"
+            metric_bg = "#a6e3a1"
+
+            [toast]
+            anchor = "bottom_right"
+            margin_x = 3
+            margin_y = 2
+            gap = 1
+            pill = true
         "##;
         let custom_cfg = Config::from_toml(custom_theme_toml).expect("valid custom [theme] table");
         assert_eq!(custom_cfg.theme.preset, ThemePreset::Catppuccin);

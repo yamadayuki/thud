@@ -284,7 +284,6 @@ pub struct ThemePalette {
     pub git_accent: (Color, Color),
     pub cmd_accent: (Color, Color),
     pub metric_accent: (Color, Color),
-    pub battery_accent: (Color, Color),
 }
 
 impl ThemePreset {
@@ -302,7 +301,6 @@ impl ThemePreset {
                 git_accent: (Color::Ansi(255), Color::Ansi(236)),
                 cmd_accent: (Color::Ansi(255), Color::Ansi(236)),
                 metric_accent: (Color::Ansi(255), Color::Ansi(236)),
-                battery_accent: (Color::Ansi(255), Color::Ansi(236)),
             },
             ThemePreset::TokyoNight => ThemePalette {
                 bar_fg: Color::Rgb(192, 202, 245),
@@ -316,7 +314,6 @@ impl ThemePreset {
                 git_accent: (Color::Rgb(26, 27, 38), Color::Rgb(187, 154, 247)),
                 cmd_accent: (Color::Rgb(26, 27, 38), Color::Rgb(255, 158, 100)),
                 metric_accent: (Color::Rgb(125, 207, 255), Color::Rgb(36, 40, 59)),
-                battery_accent: (Color::Rgb(26, 27, 38), Color::Rgb(158, 206, 106)),
             },
             ThemePreset::Catppuccin => ThemePalette {
                 bar_fg: Color::Rgb(205, 214, 244),
@@ -330,7 +327,6 @@ impl ThemePreset {
                 git_accent: (Color::Rgb(17, 17, 27), Color::Rgb(166, 227, 161)),
                 cmd_accent: (Color::Rgb(17, 17, 27), Color::Rgb(250, 179, 135)),
                 metric_accent: (Color::Rgb(148, 226, 213), Color::Rgb(49, 50, 68)),
-                battery_accent: (Color::Rgb(17, 17, 27), Color::Rgb(249, 226, 175)),
             },
             ThemePreset::Cyberpunk => ThemePalette {
                 bar_fg: Color::Rgb(0, 240, 255),
@@ -344,7 +340,6 @@ impl ThemePreset {
                 git_accent: (Color::Rgb(255, 255, 255), Color::Rgb(255, 0, 127)),
                 cmd_accent: (Color::Rgb(13, 2, 33), Color::Rgb(252, 238, 10)),
                 metric_accent: (Color::Rgb(0, 255, 102), Color::Rgb(22, 6, 54)),
-                battery_accent: (Color::Rgb(13, 2, 33), Color::Rgb(0, 255, 102)),
             },
             ThemePreset::Nord => ThemePalette {
                 bar_fg: Color::Rgb(216, 222, 233),
@@ -358,7 +353,6 @@ impl ThemePreset {
                 git_accent: (Color::Rgb(46, 52, 64), Color::Rgb(163, 190, 140)),
                 cmd_accent: (Color::Rgb(46, 52, 64), Color::Rgb(235, 203, 139)),
                 metric_accent: (Color::Rgb(136, 192, 208), Color::Rgb(67, 76, 94)),
-                battery_accent: (Color::Rgb(46, 52, 64), Color::Rgb(180, 142, 173)),
             },
             ThemePreset::Gruvbox => ThemePalette {
                 bar_fg: Color::Rgb(235, 219, 178),
@@ -372,7 +366,6 @@ impl ThemePreset {
                 git_accent: (Color::Rgb(40, 40, 40), Color::Rgb(184, 187, 38)),
                 cmd_accent: (Color::Rgb(40, 40, 40), Color::Rgb(254, 128, 25)),
                 metric_accent: (Color::Rgb(250, 189, 47), Color::Rgb(60, 56, 54)),
-                battery_accent: (Color::Rgb(40, 40, 40), Color::Rgb(211, 134, 155)),
             },
         }
     }
@@ -399,8 +392,6 @@ pub struct ThemeConfig {
     pub cmd_bg: Option<Color>,
     pub metric_fg: Option<Color>,
     pub metric_bg: Option<Color>,
-    pub battery_fg: Option<Color>,
-    pub battery_bg: Option<Color>,
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
@@ -437,10 +428,6 @@ struct ThemeTableRepr {
     metric_fg: Option<Color>,
     #[serde(skip_serializing_if = "Option::is_none")]
     metric_bg: Option<Color>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    battery_fg: Option<Color>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    battery_bg: Option<Color>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -477,8 +464,6 @@ impl From<ThemeConfigRepr> for ThemeConfig {
                 cmd_bg: t.cmd_bg,
                 metric_fg: t.metric_fg,
                 metric_bg: t.metric_bg,
-                battery_fg: t.battery_fg,
-                battery_bg: t.battery_bg,
             },
         }
     }
@@ -506,8 +491,6 @@ impl From<ThemeConfig> for ThemeConfigRepr {
                 cmd_bg: cfg.cmd_bg,
                 metric_fg: cfg.metric_fg,
                 metric_bg: cfg.metric_bg,
-                battery_fg: cfg.battery_fg,
-                battery_bg: cfg.battery_bg,
             })
         }
     }
@@ -532,8 +515,6 @@ impl ThemeConfig {
             cmd_bg: None,
             metric_fg: None,
             metric_bg: None,
-            battery_fg: None,
-            battery_bg: None,
         }
     }
 
@@ -553,8 +534,6 @@ impl ThemeConfig {
             || self.cmd_bg.is_some()
             || self.metric_fg.is_some()
             || self.metric_bg.is_some()
-            || self.battery_fg.is_some()
-            || self.battery_bg.is_some()
     }
 
     pub const fn is_unthemed_default(&self) -> bool {
@@ -608,12 +587,6 @@ impl ThemeConfig {
         }
         if let Some(c) = self.metric_bg {
             p.metric_accent.1 = c;
-        }
-        if let Some(c) = self.battery_fg {
-            p.battery_accent.0 = c;
-        }
-        if let Some(c) = self.battery_bg {
-            p.battery_accent.1 = c;
         }
         p
     }

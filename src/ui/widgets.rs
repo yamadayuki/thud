@@ -223,7 +223,7 @@ impl<'a> Gauge<'a> {
             spans.push(Span::styled(format!("{lbl} "), label_style));
         }
         if self.width == 0 {
-            spans.push(Span::styled(format!("{clamped}%"), label_style));
+            spans.push(Span::styled(format!("{clamped:>3}%"), label_style));
             return Line::new(spans);
         }
         if !filled_str.is_empty() {
@@ -232,7 +232,7 @@ impl<'a> Gauge<'a> {
         if !empty_str.is_empty() {
             spans.push(Span::styled(empty_str, track_style));
         }
-        spans.push(Span::styled(format!(" {clamped}%"), label_style));
+        spans.push(Span::styled(format!(" {clamped:>3}%"), label_style));
         Line::new(spans)
     }
 }

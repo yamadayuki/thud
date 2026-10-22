@@ -245,7 +245,7 @@ fn e2e_outer_pty_interactive_input_status_bar_ipc_and_clean_exit() {
             let contents = screen.contents();
             contents.contains("ℹ FIRST_TOAST")
                 && contents.contains("✓ SECOND_TOAST")
-                && contents.contains("Deploying ━━━━━───── 50%")
+                && contents.contains("Deploying ━━━━━─────  50%")
         }),
         "stacked toasts or progress bar failed to render; screen:\n{}",
         term.vt.screen().contents()
@@ -256,7 +256,7 @@ fn e2e_outer_pty_interactive_input_status_bar_ipc_and_clean_exit() {
     assert!(
         term.pump_until(Duration::from_secs(2), |screen| {
             let contents = screen.contents();
-            !contents.contains("✓ SECOND_TOAST") && !contents.contains("Deploying ━━━━━───── 50%")
+            !contents.contains("✓ SECOND_TOAST") && !contents.contains("Deploying ━━━━━─────  50%")
         }),
         "Zen Mode failed to hide HUD overlays; screen:\n{}",
         term.vt.screen().contents()
@@ -266,7 +266,7 @@ fn e2e_outer_pty_interactive_input_status_bar_ipc_and_clean_exit() {
     term.send_keys(b"\x1c").unwrap();
     assert!(
         term.pump_until(Duration::from_secs(2), |screen| {
-            screen.contents().contains("Deploying ━━━━━───── 50%")
+            screen.contents().contains("Deploying ━━━━━─────  50%")
         }),
         "Zen Mode toggle off failed to restore HUD; screen:\n{}",
         term.vt.screen().contents()

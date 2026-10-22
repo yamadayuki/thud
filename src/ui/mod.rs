@@ -34,7 +34,7 @@ mod tests {
         );
 
         // Render a Gauge into row 1
-        let gauge = Gauge::new(50, 4, Some("B"), CellStyle::ansi(231, 236, true));
+        let gauge = Gauge::new(5, 4, Some("B"), CellStyle::ansi(231, 236, true));
         let line = gauge.to_line();
         (&line).render(Rect::new(0, 1, 16, 1), &mut buf);
         assert!(
@@ -42,7 +42,7 @@ mod tests {
                 .lines()
                 .nth(1)
                 .unwrap()
-                .starts_with("B ━━── 50%")
+                .starts_with("B ────   5%")
         );
     }
 

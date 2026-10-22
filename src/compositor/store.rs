@@ -302,13 +302,7 @@ impl TelemetryStore {
                 WidgetKind::Cwd => palette.cwd_accent,
                 WidgetKind::GitBranch => palette.git_accent,
                 WidgetKind::ActiveCommand { .. } => palette.cmd_accent,
-                WidgetKind::Sparkline { key, .. } | WidgetKind::Gauge { key, .. } => {
-                    if key == "battery" {
-                        palette.battery_accent
-                    } else {
-                        palette.metric_accent
-                    }
-                }
+                WidgetKind::Sparkline { .. } | WidgetKind::Gauge { .. } => palette.metric_accent,
                 _ => (fallback_style.fg, fallback_style.bg),
             }
         } else {
