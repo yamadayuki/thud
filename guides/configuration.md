@@ -40,6 +40,7 @@ Top-level keys must appear at the very top of `config.toml` (before any `[table]
 | `ipc_socket` | `String` (optional) | `/tmp/thud-<pid>.sock` | Explicit Unix domain socket path for IPC commands. |
 | `zen_toggle_key` | `String` (optional) | `"ctrl-\\"` | Hotkey to toggle **Zen Mode** (hides all HUD elements and expands the child PTY to full terminal height). Set to `""` to disable. |
 | `reload_key` | `String` (optional) | `"ctrl-]"` | Hotkey to manually reload `config.toml`. Set to `""` to disable. |
+| `scrollback_lines` | `Integer` | `10000` | Maximum number of scrollback lines retained in memory for mousewheel history scrolling. |
 
 ### Supported Hotkey Syntax
 Hotkeys intercept a single raw ASCII control character before it reaches the child PTY:

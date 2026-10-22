@@ -90,7 +90,7 @@ impl Compositor {
         }
 
         let child_size = PlacementSolver::compute_child_size(initial_host_size, &config, false);
-        let vt = VtScreenAdapter::new(child_size.cols, child_size.rows);
+        let vt = VtScreenAdapter::new(child_size.cols, child_size.rows, config.scrollback_lines);
         let mut store = TelemetryStore::new();
         let due_commands = store.collect_due_commands(&config, now, false, false);
 

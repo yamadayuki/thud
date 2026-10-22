@@ -392,6 +392,8 @@ pub struct Config {
     pub zen_toggle_key: Option<String>,
     #[serde(default = "default_reload_key")]
     pub reload_key: Option<String>,
+    #[serde(default = "default_scrollback_lines")]
+    pub scrollback_lines: usize,
     #[serde(default)]
     pub status_bar: StatusBarConfig,
     #[serde(default)]
@@ -410,6 +412,10 @@ fn default_zen_toggle_key() -> Option<String> {
 
 fn default_reload_key() -> Option<String> {
     Some("ctrl-]".to_string())
+}
+
+fn default_scrollback_lines() -> usize {
+    10_000
 }
 
 fn default_overlays() -> Vec<OverlayConfig> {
@@ -447,6 +453,7 @@ impl Default for Config {
             ipc_socket: None,
             zen_toggle_key: default_zen_toggle_key(),
             reload_key: default_reload_key(),
+            scrollback_lines: default_scrollback_lines(),
             status_bar: StatusBarConfig::default(),
             toast: ToastConfig::default(),
             overlays: default_overlays(),

@@ -1,9 +1,6 @@
 use crate::ui::{Buffer, CellStyle, Color, CursorState, Rect};
 use std::num::NonZeroU16;
 
-/// Default number of scrollback lines retained in the primary virtual screen.
-const DEFAULT_SCROLLBACK_LINES: usize = 10_000;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum MouseEventKind {
     WheelUp,
@@ -93,11 +90,11 @@ pub(crate) struct VtScreenAdapter {
 }
 
 impl VtScreenAdapter {
-    pub fn new(cols: u16, rows: u16) -> Self {
+    pub fn new(cols: u16, rows: u16, scrollback_lines: usize) -> Self {
         let nz_rows = NonZeroU16::new(rows.max(1)).unwrap();
         let nz_cols = NonZeroU16::new(cols.max(1)).unwrap();
         Self {
-            vt: vt100::Parser::new(nz_rows, nz_cols, DEFAULT_SCROLLBACK_LINES),
+            vt: vt100::Parser::new(nz_rows, nz_cols, scrollback_lines),
         }
     }
 

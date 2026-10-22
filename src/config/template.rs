@@ -75,6 +75,11 @@ impl Config {
             out.push_str("# reload_key = \"ctrl-]\"\n");
         }
 
+        out.push_str(
+            "\n# Maximum number of scrollback lines retained for mousewheel history scrolling:\n",
+        );
+        let _ = writeln!(out, "scrollback_lines = {}", self.scrollback_lines);
+
         // [status_bar] section
         out.push_str(
             "\n# -----------------------------------------------------------------------------\n\
