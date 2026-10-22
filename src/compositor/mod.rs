@@ -1,3 +1,4 @@
+pub(crate) mod input;
 pub(crate) mod layout;
 pub(crate) mod painter;
 pub(crate) mod scheduler;
@@ -6,11 +7,12 @@ pub(crate) mod vt;
 
 pub use scheduler::{CommandKey, DueCommand};
 
+use crate::compositor::input::{InputAction, InputContext, InputRouter};
 use crate::compositor::layout::PlacementSolver;
 use crate::compositor::painter::HudPainter;
 use crate::compositor::scheduler::{CommandScheduler, ScheduleContext, watched_markers};
 use crate::compositor::store::{TelemetryStore, TickChanges};
-use crate::compositor::vt::{MouseEventKind, VtScreenAdapter, parse_mouse_event};
+use crate::compositor::vt::{TerminalModes, VtScreenAdapter};
 use crate::config::{Config, ConfigError, IpcMessage, TermSize, WidgetSpec};
 use crate::ui::{Buffer, CellStyle};
 use chrono::{DateTime, Local};
@@ -83,6 +85,8 @@ pub struct Compositor {
     vt: VtScreenAdapter,
     store: TelemetryStore,
     scheduler: CommandScheduler,
+    input: InputRouter,
+    host_modes: TerminalModes,
     zen_mode: bool,
     dirty: bool,
     last_now: Instant,
@@ -111,6 +115,8 @@ impl Compositor {
             vt,
             store: TelemetryStore::new(),
             scheduler: CommandScheduler::default(),
+            input: InputRouter::default(),
+            host_modes: TerminalModes::default(),
             zen_mode: false,
             dirty: false,
             last_now: now,
@@ -144,69 +150,33 @@ impl Compositor {
 
         match event {
             Event::HostInput(bytes) => {
-                let zen_byte = Config::parse_hotkey_byte(self.config.zen_toggle_key.as_deref());
-                let reload_byte = Config::parse_hotkey_byte(self.config.reload_key.as_deref());
-                let child_rect = PlacementSolver::compute_child_rect(
-                    self.host_size,
-                    &self.config,
-                    self.zen_mode,
-                );
-
-                let mut i = 0;
-                while i < bytes.len() {
-                    if let Some(mouse_ev) = parse_mouse_event(&bytes[i..]) {
-                        if self.vt.wants_mouse() {
-                            if mouse_ev.is_sgr {
-                                let adj_row = mouse_ev.row.saturating_sub(child_rect.y).max(1);
-                                let suffix = if mouse_ev.release { 'm' } else { 'M' };
-                                let _ = std::io::Write::write_fmt(
-                                    &mut child_pty_input,
-                                    format_args!(
-                                        "\x1b[<{};{};{}{}",
-                                        mouse_ev.btn, mouse_ev.col, adj_row, suffix
-                                    ),
-                                );
-                            } else {
-                                child_pty_input.extend_from_slice(&bytes[i..i + mouse_ev.len]);
-                            }
-                        } else if self.vt.is_alternate_screen() {
-                            match mouse_ev.kind {
-                                MouseEventKind::WheelUp => {
-                                    child_pty_input.extend_from_slice(b"\x1b[A");
-                                }
-                                MouseEventKind::WheelDown => {
-                                    child_pty_input.extend_from_slice(b"\x1b[B");
-                                }
-                                MouseEventKind::Other => {}
-                            }
-                        } else {
-                            match mouse_ev.kind {
-                                MouseEventKind::WheelUp => {
-                                    self.vt.scroll_up(3);
-                                }
-                                MouseEventKind::WheelDown => {
-                                    self.vt.scroll_down(3);
-                                }
-                                MouseEventKind::Other => {}
-                            }
+                let ctx = InputContext {
+                    zen_key: self.config.zen_toggle_key.map(|k| k.0),
+                    reload_key: self.config.reload_key.map(|k| k.0),
+                    child_wants_mouse: self.vt.wants_mouse(),
+                    alternate_screen: self.vt.is_alternate_screen(),
+                    child_top: PlacementSolver::compute_child_rect(
+                        self.host_size,
+                        &self.config,
+                        self.zen_mode,
+                    )
+                    .y,
+                };
+                let routed = self.input.route(bytes, &ctx);
+                child_pty_input = routed.to_child;
+                for action in routed.actions {
+                    match action {
+                        InputAction::ScrollUp(lines) => self.vt.scroll_up(lines),
+                        InputAction::ScrollDown(lines) => self.vt.scroll_down(lines),
+                        InputAction::SnapBack => self.vt.reset_scrollback(),
+                        InputAction::ToggleZen => {
+                            self.zen_mode = !self.zen_mode;
+                            let new_child_size = self.child_size();
+                            self.vt.set_size(new_child_size.cols, new_child_size.rows);
+                            child_pty_resize = Some(new_child_size);
                         }
-                        i += mouse_ev.len;
-                        continue;
+                        InputAction::Reload => reload_config = true,
                     }
-
-                    let b = bytes[i];
-                    if Some(b) == zen_byte {
-                        self.zen_mode = !self.zen_mode;
-                        let new_child_size = self.child_size();
-                        self.vt.set_size(new_child_size.cols, new_child_size.rows);
-                        child_pty_resize = Some(new_child_size);
-                    } else if Some(b) == reload_byte {
-                        reload_config = true;
-                    } else {
-                        self.vt.reset_scrollback();
-                        child_pty_input.push(b);
-                    }
-                    i += 1;
                 }
             }
             Event::PtyOutput(bytes) => {
@@ -342,7 +312,17 @@ impl Compositor {
             }
         }
         self.current_buffer = buf;
-        diff
+
+        let modes = self.vt.modes();
+        if modes == self.host_modes {
+            return diff;
+        }
+        // Mirror child input modes (e.g. bracketed paste) so the host sends matching input.
+        let mut out = Vec::with_capacity(diff.len() + 16);
+        self.host_modes.write_transition(modes, &mut out);
+        self.host_modes = modes;
+        out.extend_from_slice(&diff);
+        out
     }
 
     fn build_buffer(&self, now: Instant) -> Buffer {
@@ -1063,6 +1043,74 @@ mod tests {
         comp.step(Event::PtyOutput(b"\x1b[?1000h\x1b[?1006h"), now);
         let tx_vim = comp.step(Event::HostInput(b"\x1b[<0;15;4M"), now);
         assert_eq!(tx_vim.child_pty_input, b"\x1b[<0;15;4M");
+    }
+
+    #[test]
+    fn holds_split_mouse_reports_but_forwards_lone_escape_immediately() {
+        let now = Instant::now();
+        let (mut comp, _) =
+            Compositor::new(TermSize { cols: 20, rows: 4 }, sample_config(), now).unwrap();
+        for n in 0..12 {
+            comp.step(Event::PtyOutput(format!("line{n}\r\n").as_bytes()), now);
+        }
+        let live = comp.rendered_text();
+
+        let first = comp.step(Event::HostInput(b"\x1b[<64;10"), now);
+        let second = comp.step(Event::HostInput(b";5M"), now);
+        assert!(first.child_pty_input.is_empty());
+        assert!(second.child_pty_input.is_empty());
+        assert_ne!(comp.rendered_text(), live, "wheel-up scrolled the viewport");
+
+        let esc = comp.step(Event::HostInput(b"\x1b"), now);
+        assert_eq!(esc.child_pty_input, b"\x1b");
+        assert_eq!(
+            comp.rendered_text(),
+            live,
+            "typing snaps back to the live screen"
+        );
+    }
+
+    #[test]
+    fn bracketed_paste_is_mirrored_to_host_and_forwarded_opaquely() {
+        let now = Instant::now();
+        let (mut comp, _) =
+            Compositor::new(TermSize { cols: 20, rows: 4 }, sample_config(), now).unwrap();
+
+        comp.step(Event::PtyOutput(b"\x1b[?2004h\x1b[?1h\x1b="), now);
+        let enabled = comp.render(now).unwrap();
+        assert!(enabled.starts_with(b"\x1b[?2004h\x1b[?1h\x1b="));
+
+        // Hotkey bytes inside a paste (split across reads) reach the child untouched.
+        let first = comp.step(Event::HostInput(b"\x1b[200~ab\x1c\x1d"), now);
+        let second = comp.step(Event::HostInput(b"cd\x1b[201~\x1c"), now);
+        assert_eq!(first.child_pty_input, b"\x1b[200~ab\x1c\x1d");
+        assert!(!first.reload_config);
+        assert_eq!(second.child_pty_input, b"cd\x1b[201~");
+        assert!(comp.is_zen_mode(), "hotkey after the paste end still works");
+
+        comp.step(Event::PtyOutput(b"x"), now);
+        let unchanged = comp.render(now).unwrap();
+        assert!(!unchanged.windows(4).any(|w| w == b"2004"));
+
+        comp.step(Event::PtyOutput(b"\x1b[?2004l\x1b[?1l\x1b>"), now);
+        let disabled = comp.render(now).unwrap();
+        assert!(disabled.starts_with(b"\x1b[?2004l\x1b[?1l\x1b>"));
+    }
+
+    #[test]
+    fn rejects_invalid_hotkeys_when_loading_config() {
+        let err = Config::from_toml(r#"zen_toggle_key = "ctrl-1""#).unwrap_err();
+        assert!(err.to_string().contains("invalid hotkey 'ctrl-1'"), "{err}");
+
+        let disabled = Config::from_toml(r#"reload_key = """#).unwrap();
+        assert_eq!(disabled.reload_key, None);
+        assert_eq!(
+            Config::from_toml(&disabled.to_annotated_toml())
+                .unwrap()
+                .reload_key,
+            None,
+            "a disabled hotkey survives the annotated template round trip"
+        );
     }
 
     #[test]

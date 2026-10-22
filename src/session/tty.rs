@@ -111,7 +111,10 @@ impl OsHostTerminal {
 
 impl Drop for OsHostTerminal {
     fn drop(&mut self) {
-        let _ = self.write_diff(b"\x1b[0m\x1b[?25h\x1b[?1006l\x1b[?1000l\x1b[?1049l");
+        // Also undo child modes mirrored to the host (bracketed paste, cursor keys, keypad).
+        let _ = self.write_diff(
+            b"\x1b[0m\x1b[?25h\x1b[?2004l\x1b[?1l\x1b>\x1b[?1006l\x1b[?1000l\x1b[?1049l",
+        );
         unsafe {
             libc::tcsetattr(self.stdin_fd, libc::TCSANOW, &self.orig_termios);
         }
