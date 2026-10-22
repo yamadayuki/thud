@@ -1,0 +1,220 @@
+# Usage & IPC Guide
+
+This guide covers starting and managing `thud` sessions, keyboard shortcuts, live IPC commands (`set`, `progress`, `toast`, `reload`), raw Unix socket scripting, and integration examples.
+
+---
+
+## 1. Starting a Session
+
+Run `thud` (or `thud run`) to wrap your default `$SHELL` in a transparent HUD session:
+
+```sh
+thud
+```
+
+### Custom Shell or Config File
+```sh
+thud --shell /opt/homebrew/bin/fish --config ~/.config/thud/config.toml
+```
+
+### Nested Session Protection
+`thud` automatically exports `THUD_ACTIVE=1` and `THUD_SOCKET=/tmp/thud-<pid>.sock` inside the child shell.
+If you accidentally run `thud` (or `thud run`) inside an already active `thud` session, it refuses to nest and prints:
+```text
+thud error: already inside an active thud session (PID ...). Nested thud sessions are not permitted.
+```
+Other CLI subcommands (`thud set`, `thud progress`, `thud toast`, `thud reload`, `thud quit`, `thud init-config`) work normally inside the session.
+
+---
+
+## 2. Keyboard Shortcuts
+
+While inside a `thud` session, two hotkeys are intercepted before reaching the child shell:
+
+| Default Key | Config Option | Action |
+| :--- | :--- | :--- |
+| **`Ctrl+\`** (`0x1c`) | `zen_toggle_key = "ctrl-\\"` | **Toggle Zen Mode**: Hides all HUD elements (status bar, floating overlays, and toasts) and resizes the child PTY to occupy 100% of the terminal height. Press again to restore the HUD. |
+| **`Ctrl+]`** (`0x1d`) | `reload_key = "ctrl-]"` | **Reload Configuration**: Re-reads `config.toml` from disk and applies changes immediately. |
+
+Set either option to `""` in `config.toml` to disable interception and pass the control byte directly to your shell.
+
+---
+
+## 3. CLI Subcommands
+
+### Configuration Management
+```sh
+# Write an annotated default config to ~/.config/thud/config.toml
+thud init-config
+
+# Overwrite an existing config file
+thud init-config --force
+
+# Write to a custom path
+thud init-config --output ~/my-thud.toml
+
+# Print the annotated default config to stdout
+thud print-default-config
+
+# Manually reload config.toml in the running session
+thud reload
+```
+
+### Live IPC Slots (`thud set` / `thud clear`)
+Populate any `{ type = "ipc_slot", key = "<key>" }` widget on your status bar or floating overlay:
+
+```sh
+# Set the default "status" slot on the status bar
+thud set status "🤖 Claude: running tests"
+
+# Set a slot that automatically disappears after 10 seconds (10,000 ms)
+thud set status "Deploying to staging..." --ttl-ms 10000
+
+# Clear the slot immediately
+thud clear status
+```
+
+### Live Progress & Metrics (`thud progress`)
+Push numeric percentage samples (`0..=100`) to `gauge` and `sparkline` widgets:
+- **Configured key**: If `<key>` matches a `gauge` or `sparkline` widget in `config.toml`, that widget updates in-place.
+- **Ad-hoc key**: If `<key>` is **not** referenced anywhere in `config.toml`, `thud` automatically pops up a floating progress gauge in your `[toast]` stack until you mark it `done` (or it expires)!
+
+```sh
+# Drive an ad-hoc or configured progress bar
+for pct in 10 35 70 100; do
+  thud progress build "$pct" --label "cargo test"
+  sleep 0.3
+done
+
+# Clear the progress bar when finished
+thud progress build done
+```
+
+### Stacked Toast Notifications (`thud toast`)
+Trigger transient notifications in the corner configured by `[toast]` (defaults to `bottom_right` floating above the status bar):
+
+```sh
+thud toast "Build succeeded!" --level success
+thud toast "3 clippy warnings found" --level warn --ttl-ms 6000
+thud toast "Deployment failed" --level error --ttl-ms 8000
+thud toast "Indexing workspace..." --level info --ttl-ms 3000
+```
+
+Available `--level` values:
+- `info` *(default, blue)*
+- `success` *(green)*
+- `warn` *(amber/orange)*
+- `error` *(red)*
+
+### Exiting the Session (`thud quit`)
+You can exit normally by typing `exit` / pressing `Ctrl+D` in your shell, or terminate the session via IPC:
+```sh
+thud quit
+```
+
+---
+
+## 4. Environment Variables
+
+Inside a running `thud` session, the following environment variables are available to child processes:
+
+| Variable | Description |
+| :--- | :--- |
+| `THUD_ACTIVE` | Set to `"1"` inside an active `thud` PTY session. |
+| `THUD_SOCKET` | Path to the active session's Unix domain socket (e.g., `/tmp/thud-12345.sock`). Used automatically by `thud set`, `thud progress`, `thud toast`, `thud reload`, and `thud quit`. |
+| `THUD_CONFIG` | Path to the active `config.toml` file. |
+
+To send IPC commands from an **external** terminal window or background daemon that did not inherit `$THUD_SOCKET`, pass `--socket`:
+```sh
+thud --socket /tmp/thud-12345.sock toast "Background job finished!" --level success
+```
+
+---
+
+## 5. Raw JSON Unix Socket Protocol
+
+In addition to the `thud` CLI subcommands, any language or tool can send newline-delimited JSON messages directly to `$THUD_SOCKET` (e.g., via `nc -U "$THUD_SOCKET"` or `socat`):
+
+```json
+{"action": "set_slot", "key": "status", "value": "READY", "ttl_ms": 5000}
+{"action": "clear_slot", "key": "status"}
+{"action": "push_metric", "key": "build", "value": 75, "label": "Compiling", "ttl_ms": 15000}
+{"action": "toast", "message": "Hello from socket", "level": "info", "ttl_ms": 4000}
+{"action": "reload_config"}
+{"action": "shutdown"}
+```
+
+You can also dynamically add or remove floating overlays at runtime via JSON IPC:
+```sh
+printf '%s\n' '{
+  "action": "upsert_overlay",
+  "overlay": {
+    "id": "live_panel",
+    "anchor": "top_left",
+    "border": "rounded",
+    "title": " AGENT ",
+    "padding_x": 1,
+    "widgets": [
+      { "type": "text", "text": "Refactoring src/ui..." }
+    ],
+    "ttl_ms": 8000
+  }
+}' | nc -U "$THUD_SOCKET"
+
+# Remove it early:
+printf '%s\n' '{"action": "remove_overlay", "id": "live_panel"}' | nc -U "$THUD_SOCKET"
+```
+
+---
+
+## 6. Practical Integration Recipes
+
+### Recipe 1: Auto-Notify When Long Commands Finish (`zsh` / `fish`)
+Notify yourself with a toast whenever a command takes longer than 10 seconds:
+
+**Fish (`~/.config/fish/config.fish`)**:
+```fish
+if set -q THUD_ACTIVE
+    function __thud_postexec --on-event fish_postexec
+        if test $CMD_DURATION -gt 10000
+            set -l secs (math -s1 "$CMD_DURATION / 1000")
+            thud toast "Finished ($secs s): $argv[1]" --level success
+        end
+    end
+end
+```
+
+**Zsh (`~/.zshrc`)**:
+```zsh
+if [[ -n "$THUD_ACTIVE" ]]; then
+  autoload -Uz add-zsh-hook
+  _thud_preexec() { _thud_cmd_start=$SECONDS; _thud_cmd_name="$1"; }
+  _thud_precmd() {
+    local exit_code=$?
+    if [[ -n "$_thud_cmd_start" ]] && (( SECONDS - _thud_cmd_start >= 10 )); then
+      local elapsed=$(( SECONDS - _thud_cmd_start ))
+      if (( exit_code == 0 )); then
+        thud toast "Done (${elapsed}s): ${_thud_cmd_name}" --level success
+      else
+        thud toast "Failed [exit ${exit_code}] (${elapsed}s): ${_thud_cmd_name}" --level error
+      fi
+    fi
+    unset _thud_cmd_start
+  }
+  add-zsh-hook preexec _thud_preexec
+  add-zsh-hook precmd _thud_precmd
+fi
+```
+
+### Recipe 2: Project-Aware Language / Tooling Versions in `config.toml`
+Use `type = "command"` with `trigger = "change"` and `when_files` so version commands only run inside relevant repositories and never poll on a timer:
+
+```toml
+[status_bar]
+left = [
+    { type = "cwd", padding = true, bold = true },
+    { type = "git_branch", padding = true, bold = true },
+    { type = "command", id = "rust", cmd = "rustc -V | cut -d' ' -f2", trigger = "change", when_files = ["Cargo.toml"], icon = "🦀", padding = true },
+    { type = "command", id = "node", cmd = "node -v", trigger = "change", when_files = ["package.json", ".nvmrc"], icon = "⬢", padding = true },
+]
+```
