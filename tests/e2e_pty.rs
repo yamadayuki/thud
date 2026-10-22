@@ -301,12 +301,12 @@ fn e2e_outer_pty_interactive_input_status_bar_ipc_and_clean_exit() {
         term.row_text(29)
     );
 
-    // 4. Exit shell and verify cth exits with code 0 and leaves alternate screen (?1049l)
+    // 4. Exit shell and verify thud exits with code 0 and leaves alternate screen (?1049l)
     term.send_keys(b"exit\r").unwrap();
     let exit_code = term.wait_exit(Duration::from_secs(3));
     assert_eq!(exit_code, Some(0), "expected clean exit code 0");
     assert!(
         !term.vt.screen().alternate_screen(),
-        "expected cth to restore outer terminal from alternate screen (?1049l) on exit"
+        "expected thud to restore outer terminal from alternate screen (?1049l) on exit"
     );
 }

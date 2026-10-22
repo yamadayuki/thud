@@ -379,7 +379,7 @@ mod tests {
             .set_environment(
                 t0,
                 BuiltinValues {
-                    cwd: Some("~/cth".to_string()),
+                    cwd: Some("~/thud".to_string()),
                     git_branch: Some("git:main".to_string()),
                     battery: None,
                     fg_process: None,
@@ -397,7 +397,7 @@ mod tests {
                 "-- VIM BUFFER --           14:25\n",
                 "                                \n",
                 "                                \n",
-                "~/cth | git:main | NORMAL  UP:5d"
+                "~/thud | git:main | NORMAL  UP:5d"
             )
         );
     }

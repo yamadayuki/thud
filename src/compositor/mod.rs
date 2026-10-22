@@ -546,7 +546,7 @@ mod tests {
             Event::Tick {
                 wall_clock: fixed_time,
                 builtins: BuiltinValues {
-                    cwd: Some("~/cth".to_string()),
+                    cwd: Some("~/thud".to_string()),
                     git_branch: None,
                     battery: None,
                     fg_process: None,
@@ -578,7 +578,7 @@ mod tests {
                 "hello world    14:30\n",
                 "                    \n",
                 "                    \n",
-                "~/cth | NORM      R1"
+                "~/thud | NORM      R1"
             )
         );
     }
