@@ -6,6 +6,10 @@ on:
   pull_request:
     branches: [main]
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   lint:
     name: Lint & Validation (Ubuntu)
@@ -46,7 +50,7 @@ jobs:
         run: cargo fmt --check
 
       - name: Run clippy
-        run: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --locked --all-targets -- -D warnings
 
   test:
     name: Test (${{ matrix.os }})
@@ -81,7 +85,7 @@ jobs:
 
       - name: Run clippy (macOS platform cfg check)
         if: matrix.os == 'macos-latest'
-        run: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --locked --all-targets -- -D warnings
 
       - name: Run test suite
-        run: cargo test --verbose
+        run: cargo test --locked --verbose

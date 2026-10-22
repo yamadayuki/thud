@@ -14,6 +14,7 @@ pub(crate) struct OsChildPty {
 impl OsChildPty {
     pub fn spawn(shell: &str, initial_size: TermSize, socket_path: &Path) -> io::Result<Self> {
         let mut master_fd: libc::c_int = -1;
+        #[allow(unused_mut)]
         let mut ws = libc::winsize {
             ws_row: initial_size.rows,
             ws_col: initial_size.cols,

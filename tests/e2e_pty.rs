@@ -19,6 +19,7 @@ impl OuterTerminalSimulator {
     fn spawn_thud(cols: u16, rows: u16, args: &[&str]) -> io::Result<Self> {
         let bin_path = env!("CARGO_BIN_EXE_thud");
         let mut master_fd: c_int = -1;
+        #[allow(unused_mut)]
         let mut ws = winsize {
             ws_row: rows,
             ws_col: cols,
