@@ -13,11 +13,17 @@ struct OuterTerminalSimulator {
     child_pid: libc::pid_t,
     vt: vt100::Parser,
     raw_output: Vec<u8>,
+    work_dir: std::path::PathBuf,
 }
 
 impl OuterTerminalSimulator {
     fn spawn_thud(cols: u16, rows: u16, args: &[&str]) -> io::Result<Self> {
         let bin_path = env!("CARGO_BIN_EXE_thud");
+        // Run from a short directory with a fixed branch so the status bar width does not depend
+        // on the checkout path or the developer's current branch name.
+        let work_dir = std::path::PathBuf::from(format!("/tmp/thud-e2e-{}", std::process::id()));
+        std::fs::create_dir_all(work_dir.join(".git"))?;
+        std::fs::write(work_dir.join(".git/HEAD"), "ref: refs/heads/e2e\n")?;
         let mut master_fd: c_int = -1;
         #[allow(unused_mut)]
         let mut ws = winsize {
@@ -54,6 +60,7 @@ impl OuterTerminalSimulator {
                 std::env::remove_var("THUD_SOCKET");
                 std::env::remove_var("THUD_TTY");
             }
+            let _ = std::env::set_current_dir(&work_dir);
             let c_bin = CString::new(bin_path).unwrap();
             let mut c_args: Vec<CString> = Vec::with_capacity(args.len() + 1);
             c_args.push(c_bin.clone());
@@ -83,6 +90,7 @@ impl OuterTerminalSimulator {
             child_pid: pid,
             vt: vt100::Parser::new(nz_rows, nz_cols, 0),
             raw_output: Vec::new(),
+            work_dir,
         })
     }
 
@@ -209,6 +217,7 @@ impl Drop for OuterTerminalSimulator {
             let mut status: c_int = 0;
             libc::waitpid(self.child_pid, &mut status, 0);
         }
+        let _ = std::fs::remove_dir_all(&self.work_dir);
     }
 }
 

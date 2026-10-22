@@ -365,4 +365,27 @@ mod tests {
         assert_eq!(probes.cached_git_branch.as_deref(), Some("git:main"));
         assert_eq!(probes.last_raw_cwd.as_ref(), Some(&cwd));
     }
+
+    #[test]
+    fn resolves_git_branch_from_ancestor_head_file() {
+        let root = std::env::temp_dir().join(format!("thud-git-probe-{}", std::process::id()));
+        let nested = root.join("src/deep");
+        fs::create_dir_all(root.join(".git")).unwrap();
+        fs::create_dir_all(&nested).unwrap();
+
+        fs::write(root.join(".git/HEAD"), "ref: refs/heads/feature/hud\n").unwrap();
+        assert_eq!(
+            resolve_git_branch(&nested).as_deref(),
+            Some("git:feature/hud")
+        );
+
+        fs::write(
+            root.join(".git/HEAD"),
+            "0123456789abcdef0123456789abcdef01234567\n",
+        )
+        .unwrap();
+        assert_eq!(resolve_git_branch(&nested).as_deref(), Some("git:0123456"));
+
+        let _ = fs::remove_dir_all(&root);
+    }
 }

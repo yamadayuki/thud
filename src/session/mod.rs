@@ -439,7 +439,6 @@ impl Session {
 mod tests {
     use super::*;
     use crate::compositor::BuiltinValues;
-    use crate::session::probes::resolve_git_branch;
     use chrono::TimeZone;
 
     #[test]
@@ -496,13 +495,6 @@ mod tests {
                 "~/thud | git:main | NORMAL UP:5d"
             )
         );
-    }
-
-    #[test]
-    fn resolves_git_branch_from_repository_root() {
-        let cwd = std::env::current_dir().unwrap();
-        let branch = resolve_git_branch(&cwd);
-        assert_eq!(branch.as_deref(), Some("git:main"));
     }
 
     #[test]
