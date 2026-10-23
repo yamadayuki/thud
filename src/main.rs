@@ -90,6 +90,22 @@ fn try_main() -> Result<(), SessionError> {
                 },
             )
         }
+        Some("zen") => {
+            // Usage: thud zen [on|off] [--socket <path>]
+            let (enabled, rest) = match args.get(1).map(String::as_str) {
+                Some("on") => (Some(true), &args[2..]),
+                Some("off") => (Some(false), &args[2..]),
+                Some("toggle") => (None, &args[2..]),
+                Some(other) if !other.starts_with('-') => {
+                    return Err(SessionError::Usage(format!(
+                        "invalid zen mode '{other}' (expected on|off|toggle)"
+                    )));
+                }
+                _ => (None, &args[1..]),
+            };
+            let flags = parse_ipc_flags(rest)?;
+            Session::send_ipc_message(flags.socket, &IpcMessage::Zen { enabled })
+        }
         Some("reload") => {
             let flags = parse_ipc_flags(&args[1..])?;
             Session::send_ipc_message(flags.socket, &IpcMessage::ReloadConfig)
@@ -274,6 +290,7 @@ USAGE:
   thud clear <key>                                           Clear an IPC status slot or metric
   thud progress <key> <0..100|done> [--label <txt>]          Push progress/metric for gauge or sparkline widgets
   thud toast <msg> [--level info|success|warn|error]         Enqueue a stacked toast notification overlay
+  thud zen [on|off]                                          Hide/show all HUD elements (toggles without an argument)
   thud reload                                                Reload config.toml in the active thud session
   thud quit                                                  Gracefully exit the active thud session"
     );

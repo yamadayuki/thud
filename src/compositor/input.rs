@@ -12,10 +12,6 @@ pub(crate) enum InputAction {
     ScrollDown(usize),
     /// Return the viewport to the live bottom of the scrollback.
     SnapBack,
-    ToggleZen,
-    /// Invert mouse capture, or return to the configured `mouse` mode.
-    ToggleMouse,
-    Reload,
     /// A line was submitted to the child (Enter outside a bracketed paste).
     Submit,
 }
@@ -30,9 +26,6 @@ pub(crate) struct RoutedInput {
 /// The child and HUD state that decides what host input means.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct InputContext {
-    pub zen_key: Option<u8>,
-    pub reload_key: Option<u8>,
-    pub mouse_key: Option<u8>,
     /// The child enabled mouse tracking, so mouse reports are forwarded to it.
     pub child_wants_mouse: bool,
     /// Encoding the child requested for forwarded mouse reports.
@@ -42,9 +35,9 @@ pub(crate) struct InputContext {
     pub child_top: u16,
 }
 
-/// Decides what each piece of host input means: bytes for the child, scrollback movement,
-/// a HUD hotkey, or an opaque bracketed paste. Holds incomplete mouse reports until the
-/// rest arrives in a later read.
+/// Decides what each piece of host input means: bytes for the child, scrollback movement, or
+/// an opaque bracketed paste. It never consumes keys for itself. Holds incomplete mouse
+/// reports until the rest arrives in a later read.
 #[derive(Debug, Default)]
 pub(crate) struct InputRouter {
     pending: Vec<u8>,
@@ -100,24 +93,13 @@ impl InputRouter {
             }
 
             let b = rest[0];
-            if Some(b) == ctx.zen_key {
-                out.actions.push(InputAction::ToggleZen);
-                forwarding = false;
-            } else if Some(b) == ctx.reload_key {
-                out.actions.push(InputAction::Reload);
-                forwarding = false;
-            } else if Some(b) == ctx.mouse_key {
-                out.actions.push(InputAction::ToggleMouse);
-                forwarding = false;
-            } else {
-                if !forwarding {
-                    out.actions.push(InputAction::SnapBack);
-                    forwarding = true;
-                }
-                out.to_child.push(b);
-                if b == b'\r' || b == b'\n' {
-                    out.actions.push(InputAction::Submit);
-                }
+            if !forwarding {
+                out.actions.push(InputAction::SnapBack);
+                forwarding = true;
+            }
+            out.to_child.push(b);
+            if b == b'\r' || b == b'\n' {
+                out.actions.push(InputAction::Submit);
             }
             i += 1;
         }

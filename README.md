@@ -11,7 +11,7 @@ It wraps any interactive shell (`fish`, `zsh`, `bash`, `nu`, etc.) inside a tran
 
 ## Documentation
 
-- **[Usage & IPC Guide (`guides/usage.md`)](./guides/usage.md)** — Starting sessions, hotkeys, CLI subcommands (`set`, `progress`, `toast`, `reload`, `quit`), raw JSON socket protocol, and shell integration recipes.
+- **[Usage & IPC Guide (`guides/usage.md`)](./guides/usage.md)** — Starting sessions, Zen mode, CLI subcommands (`set`, `progress`, `toast`, `zen`, `reload`, `quit`), raw JSON socket protocol, and shell integration recipes.
 - **[Configuration Reference (`guides/configuration.md`)](./guides/configuration.md)** — Complete reference for every `config.toml` option, theme palette override, color/alpha syntax, widget type, and collision policy.
 
 ---
@@ -51,11 +51,9 @@ It wraps any interactive shell (`fish`, `zsh`, `bash`, `nu`, etc.) inside a tran
 - Pushing an unconfigured key via `thud progress <key> <0..100>` automatically displays a temporary floating progress gauge above the toast stack until `thud progress <key> done`.
 - Configurable `anchor`, `margin_x`, `margin_y`, `gap`, `pill`, and `border`.
 
-### 5. Live Configuration Reload & Hotkeys
-- **Auto-reload on save**: Saving `~/.config/thud/config.toml` automatically reloads the HUD within 250ms (showing an error toast if TOML syntax is invalid while keeping the current config active).
-- **`Ctrl+\`** (`zen_toggle_key`): Toggle **Zen Mode** (instantly hide/show all HUD chrome).
-- **`Ctrl+]`** (`reload_key`) or `thud reload`: Manually reload `config.toml` at any time.
-- **`Ctrl+^`** (`mouse_toggle_key`): Toggle mouse capture. By default (`mouse = "auto"`) thud only takes the mouse while the app inside asks for it, so you can select and copy terminal text at the shell prompt.
+### 5. Live Configuration Reload & Zen Mode
+- **Auto-reload on save**: Saving `~/.config/thud/config.toml` automatically reloads the HUD within 250ms (showing an error toast if TOML syntax is invalid while keeping the current config active). `thud reload` reloads on demand.
+- **`thud zen [on|off]`**: Hide or show all HUD chrome. thud never intercepts keys or the mouse; bind `thud zen` in your shell if you want a key for it.
 
 ### 6. High-Performance Frame Pacing & Zero-Allocation UI Engine
 - **Decoupled PTY Ingestion & 144 FPS Frame Pacing**: High-bandwidth child output (e.g. streaming logs) is ingested immediately into the virtual screen parser without stalling the child shell, while frame composition is paced at up to ~144 FPS (6.9ms).
@@ -76,7 +74,7 @@ It wraps any interactive shell (`fish`, `zsh`, `bash`, `nu`, etc.) inside a tran
 
 ```mermaid
 flowchart LR
-    User["Outer Terminal (stdin / stdout)"] <-->|"Raw ANSI / Hotkeys"| Session["Session Event Loop (poll)"]
+    User["Outer Terminal (stdin / stdout)"] <-->|"Raw ANSI / Keys"| Session["Session Event Loop (poll)"]
     Session <-->|"TIOCSWINSZ / PTY Master"| Child["Child Shell / TUI Process"]
     IPC["CLI / Agent (`thud set/progress/toast/reload`)"] -->|"Unix Socket JSON"| Session
     Session -->|"Event (PtyOutput, Tick, Ipc, ReloadConfig)"| Compositor["Sans-I/O Compositor"]
@@ -166,10 +164,6 @@ thud reload
 
 ```toml
 theme = "tokyo_night"
-zen_toggle_key = "ctrl-\\"
-reload_key = "ctrl-]"
-mouse = "auto"
-mouse_toggle_key = "ctrl-^"
 
 [status_bar]
 enabled = true

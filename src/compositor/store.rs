@@ -175,7 +175,7 @@ impl TelemetryStore {
             IpcMessage::RemoveOverlay { id } => {
                 self.dynamic_overlays.remove(&id);
             }
-            IpcMessage::ReloadConfig | IpcMessage::Quit => {}
+            IpcMessage::ReloadConfig | IpcMessage::Zen { .. } | IpcMessage::Quit => {}
         }
     }
 

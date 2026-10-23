@@ -428,7 +428,7 @@ mod tests {
     }
 
     #[test]
-    fn reloads_config_on_change_reload_key_and_ipc() {
+    fn reloads_config_on_change_and_ipc_but_never_on_keys() {
         let mut session = start(text_bar_config("OLD"), MemorySessionIo::new(60, 6));
 
         session
@@ -451,13 +451,14 @@ mod tests {
             "invalid config keeps the old one"
         );
 
+        // Former reload hotkey bytes now reach the shell instead of reloading
         session
             .io_mut()
-            .set_config(Ok(text_bar_config("BY_KEY")))
+            .set_config(Ok(text_bar_config("NOT_BY_KEY")))
             .push_host_input(&[0x1d]);
         session.advance(Duration::ZERO);
-        assert!(session.screen_text().contains("BY_KEY"));
-        assert!(session.io_mut().take_child_input().is_empty());
+        assert!(!session.screen_text().contains("NOT_BY_KEY"));
+        assert_eq!(session.io_mut().take_child_input(), [0x1d]);
 
         session
             .io_mut()

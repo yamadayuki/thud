@@ -60,6 +60,11 @@ pub enum IpcMessage {
     RemoveOverlay { id: String },
     /// Reload the configuration file (`config.toml`) in the active `thud` session.
     ReloadConfig,
+    /// Hide (`Some(true)`) or show (`Some(false)`) all HUD elements, or toggle when `None`.
+    Zen {
+        #[serde(default)]
+        enabled: Option<bool>,
+    },
     /// Gracefully terminate the active `thud` session.
     Quit,
 }
