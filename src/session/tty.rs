@@ -80,8 +80,10 @@ impl OsHostTerminal {
             stdout: io::stdout(),
             orig_termios,
         };
-        // Enter outer alternate screen buffer, enable SGR mouse wheel/button tracking, and clear screen
-        host.write_diff(b"\x1b[?1049h\x1b[?1000h\x1b[?1006h\x1b[2J\x1b[H")?;
+        // Enter the alternate screen and disable alternate scroll (`?1007`) so the wheel is not
+        // turned into arrow keys while thud leaves the mouse to the terminal. Mouse reporting
+        // itself is mirrored from the Compositor (ADR-009).
+        host.write_diff(b"\x1b[?1049h\x1b[?1007l\x1b[2J\x1b[H")?;
         Ok(host)
     }
 
@@ -111,9 +113,10 @@ impl OsHostTerminal {
 
 impl Drop for OsHostTerminal {
     fn drop(&mut self) {
-        // Also undo child modes mirrored to the host (bracketed paste, cursor keys, keypad).
+        // Also undo modes mirrored to the host (bracketed paste, cursor keys, keypad, mouse) and
+        // restore alternate scroll.
         let _ = self.write_diff(
-            b"\x1b[0m\x1b[?25h\x1b[?2004l\x1b[?1l\x1b>\x1b[?1006l\x1b[?1000l\x1b[?1049l",
+            b"\x1b[0m\x1b[?25h\x1b[?2004l\x1b[?1l\x1b>\x1b[?1006l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1007h\x1b[?1049l",
         );
         unsafe {
             libc::tcsetattr(self.stdin_fd, libc::TCSANOW, &self.orig_termios);

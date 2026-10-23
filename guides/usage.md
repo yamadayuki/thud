@@ -38,14 +38,20 @@ Other CLI subcommands (`thud set`, `thud progress`, `thud toast`, `thud reload`,
 
 ## 2. Keyboard Shortcuts
 
-While inside a `thud` session, two hotkeys are intercepted before reaching the child shell:
+While inside a `thud` session, three hotkeys are intercepted before reaching the child shell:
 
 | Default Key | Config Option | Action |
 | :--- | :--- | :--- |
 | **`Ctrl+\`** (`0x1c`) | `zen_toggle_key = "ctrl-\\"` | **Toggle Zen Mode**: Hides all HUD elements (status bar, floating overlays, and toasts) and resizes the child PTY to occupy 100% of the terminal height. Press again to restore the HUD. |
 | **`Ctrl+]`** (`0x1d`) | `reload_key = "ctrl-]"` | **Reload Configuration**: Re-reads `config.toml` from disk and applies changes immediately. |
+| **`Ctrl+^`** (`0x1e`) | `mouse_toggle_key = "ctrl-^"` | **Toggle Mouse Capture**: Inverts mouse capture until pressed again (toast: `Mouse: thud (scroll)` / `Mouse: terminal (select)` / `Mouse: auto`). Note that vim also uses `Ctrl+^` (alternate file). |
 
-Set either option to `""` in `config.toml` to disable interception and pass the control byte directly to your shell.
+Set any option to `""` in `config.toml` to disable interception and pass the control byte directly to your shell.
+
+### Selecting & Copying Text
+With the default `mouse = "auto"`, thud only captures the mouse while the app inside asks for it (vim, htop, less with mouse support, …). At the shell prompt your terminal's own selection and copy work as usual.
+- **Scroll thud's history with the wheel**: press `Ctrl+^` to capture the mouse, and press it again when done (or set `mouse = "always"`).
+- **Select text inside a mouse app**: press `Ctrl+^` to hand the mouse back to the terminal, select and copy, then press it again.
 
 ---
 

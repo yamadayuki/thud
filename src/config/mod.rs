@@ -57,6 +57,30 @@ pub enum ScreenCondition {
     AlternateOnly,
 }
 
+/// When thud captures host mouse reporting (which disables the terminal's own text selection).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MouseMode {
+    /// Only while the child requests mouse tracking (e.g. vim, htop); text is selectable at
+    /// the shell.
+    #[default]
+    Auto,
+    /// Always; the wheel scrolls thud's scrollback at the shell.
+    Always,
+    /// Never; mouse apps inside thud receive no mouse input.
+    Off,
+}
+
+impl std::fmt::Display for MouseMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            MouseMode::Auto => "auto",
+            MouseMode::Always => "always",
+            MouseMode::Off => "off",
+        })
+    }
+}
+
 /// Execution trigger policy for `type = "command"` widgets.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -410,6 +434,14 @@ pub struct Config {
         deserialize_with = "deserialize_optional_hotkey"
     )]
     pub reload_key: Option<Hotkey>,
+    #[serde(default)]
+    pub mouse: MouseMode,
+    /// Temporarily inverts mouse capture; pressing it again returns to `mouse`.
+    #[serde(
+        default = "default_mouse_toggle_key",
+        deserialize_with = "deserialize_optional_hotkey"
+    )]
+    pub mouse_toggle_key: Option<Hotkey>,
     #[serde(default = "default_scrollback_lines")]
     pub scrollback_lines: usize,
     #[serde(default)]
@@ -432,6 +464,10 @@ fn default_zen_toggle_key() -> Option<Hotkey> {
 
 fn default_reload_key() -> Option<Hotkey> {
     Some(Hotkey(0x1d))
+}
+
+fn default_mouse_toggle_key() -> Option<Hotkey> {
+    Some(Hotkey(0x1e))
 }
 
 /// A HUD hotkey: a single control byte written as `"ctrl-<key>"` in the config
@@ -540,6 +576,8 @@ impl Default for Config {
             ipc_socket: None,
             zen_toggle_key: default_zen_toggle_key(),
             reload_key: default_reload_key(),
+            mouse: MouseMode::default(),
+            mouse_toggle_key: default_mouse_toggle_key(),
             scrollback_lines: default_scrollback_lines(),
             status_bar: StatusBarConfig::default(),
             toast: ToastConfig::default(),

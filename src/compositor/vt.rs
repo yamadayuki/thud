@@ -1,12 +1,51 @@
 use crate::ui::{Buffer, CellStyle, Color, CursorState, Rect};
 use std::num::NonZeroU16;
 
-/// Child terminal modes that change what the host terminal must send as input.
+/// Mouse tracking level: which mouse events the terminal reports (`?1000` / `?1002` / `?1003`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum MouseTracking {
+    /// Not reported; the terminal selects text itself.
+    #[default]
+    Off,
+    /// Button presses, releases, and the wheel (`?1000`).
+    Click,
+    /// Plus motion while a button is held (`?1002`).
+    Drag,
+    /// Plus all motion (`?1003`).
+    Motion,
+}
+
+impl MouseTracking {
+    fn private_mode(self) -> Option<&'static [u8]> {
+        match self {
+            MouseTracking::Off => None,
+            MouseTracking::Click => Some(b"1000"),
+            MouseTracking::Drag => Some(b"1002"),
+            MouseTracking::Motion => Some(b"1003"),
+        }
+    }
+}
+
+/// How the child wants mouse reports encoded.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum MouseEncoding {
+    /// `ESC [ M` followed by three bytes offset by 32.
+    #[default]
+    Classic,
+    /// Like `Classic`, but each value is a UTF-8 encoded character (`?1005`).
+    Utf8,
+    /// `ESC [ < b ; x ; y M/m` (`?1006`).
+    Sgr,
+}
+
+/// Terminal modes that change what the host terminal must send as input. Read from the
+/// child, then adjusted by `Compositor` for mouse capture before being mirrored to the host.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct TerminalModes {
     pub bracketed_paste: bool,
     pub application_cursor: bool,
     pub application_keypad: bool,
+    pub mouse: MouseTracking,
 }
 
 impl TerminalModes {
@@ -32,6 +71,25 @@ impl TerminalModes {
             } else {
                 b"\x1b>"
             });
+        }
+        if self.mouse != next.mouse {
+            // The host always reports in SGR, which thud parses and re-encodes for the child.
+            if let Some(mode) = self.mouse.private_mode() {
+                out.extend_from_slice(b"\x1b[?");
+                out.extend_from_slice(mode);
+                out.push(b'l');
+            }
+            match next.mouse.private_mode() {
+                Some(mode) => {
+                    out.extend_from_slice(b"\x1b[?");
+                    out.extend_from_slice(mode);
+                    out.push(b'h');
+                    if self.mouse == MouseTracking::Off {
+                        out.extend_from_slice(b"\x1b[?1006h");
+                    }
+                }
+                None => out.extend_from_slice(b"\x1b[?1006l"),
+            }
         }
     }
 }
@@ -69,6 +127,23 @@ impl VtScreenAdapter {
             bracketed_paste: screen.bracketed_paste(),
             application_cursor: screen.application_cursor(),
             application_keypad: screen.application_keypad(),
+            mouse: match screen.mouse_protocol_mode() {
+                vt100::MouseProtocolMode::None => MouseTracking::Off,
+                vt100::MouseProtocolMode::Press | vt100::MouseProtocolMode::PressRelease => {
+                    MouseTracking::Click
+                }
+                vt100::MouseProtocolMode::ButtonMotion => MouseTracking::Drag,
+                vt100::MouseProtocolMode::AnyMotion => MouseTracking::Motion,
+            },
+        }
+    }
+
+    /// Returns how the child wants mouse reports encoded.
+    pub fn mouse_encoding(&self) -> MouseEncoding {
+        match self.vt.screen().mouse_protocol_encoding() {
+            vt100::MouseProtocolEncoding::Default => MouseEncoding::Classic,
+            vt100::MouseProtocolEncoding::Utf8 => MouseEncoding::Utf8,
+            vt100::MouseProtocolEncoding::Sgr => MouseEncoding::Sgr,
         }
     }
 
