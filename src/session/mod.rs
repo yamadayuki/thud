@@ -121,7 +121,7 @@ mod tests {
     fn unix_socket_ipc_roundtrip_delivers_messages_and_cleans_up_on_drop() {
         let sock_path = std::env::temp_dir().join(format!("thud-test-{}.sock", std::process::id()));
         {
-            let server = OsIpcServer::bind(&sock_path).unwrap();
+            let mut server = OsIpcServer::bind(&sock_path).unwrap();
             Session::send_ipc_message(
                 Some(sock_path.clone()),
                 &IpcMessage::SetSlot {
@@ -143,5 +143,41 @@ mod tests {
             );
         }
         assert!(!sock_path.exists());
+    }
+
+    #[test]
+    fn ipc_server_keeps_clients_accepted_before_they_write() {
+        use std::io::Write;
+
+        let sock_path =
+            std::env::temp_dir().join(format!("thud-early-{}.sock", std::process::id()));
+        let mut server = OsIpcServer::bind(&sock_path).unwrap();
+
+        // Accepted while the client has not written yet (the macOS race behind EPIPE).
+        let mut client = UnixStream::connect(&sock_path).unwrap();
+        assert!(server.drain_messages().is_empty());
+
+        client
+            .write_all(br#"{"action":"set_slot","key":"a","value":"1"}"#)
+            .unwrap();
+        client.write_all(b"\n{\"action\":\"clear_slot\",").unwrap();
+        assert_eq!(
+            server.drain_messages(),
+            vec![IpcMessage::SetSlot {
+                key: "a".to_string(),
+                value: "1".to_string(),
+                ttl_ms: None,
+            }]
+        );
+
+        // The rest of a split message, terminated by closing the connection.
+        client.write_all(br#""key":"a"}"#).unwrap();
+        drop(client);
+        assert_eq!(
+            server.drain_messages(),
+            vec![IpcMessage::ClearSlot {
+                key: "a".to_string()
+            }]
+        );
     }
 }
