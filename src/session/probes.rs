@@ -8,7 +8,43 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
+
+/// How long after a line is submitted at the shell prompt a sample may treat the command as
+/// finished without having seen it in the foreground.
+const SUBMIT_SETTLE: Duration = Duration::from_millis(100);
+
+/// Decides when a foreground command finished, including commands too short to be seen in
+/// the foreground between two samples.
+#[derive(Debug, Default)]
+struct CommandCompletion {
+    last_fg_running: bool,
+    pending_submit: Option<Instant>,
+}
+
+impl CommandCompletion {
+    /// `fg_running`: a process other than the shell holds the PTY foreground.
+    /// `submitted_at`: when a line was last submitted, if one was since the previous sample.
+    fn observe(&mut self, fg_running: bool, submitted_at: Option<Instant>, now: Instant) -> bool {
+        if submitted_at.is_some() {
+            self.pending_submit = submitted_at;
+        }
+        let observed = self.last_fg_running && !fg_running;
+        self.last_fg_running = fg_running;
+        if fg_running {
+            // The command is visible; its end will be observed directly.
+            self.pending_submit = None;
+            return false;
+        }
+        let settled = self
+            .pending_submit
+            .is_some_and(|at| now.saturating_duration_since(at) >= SUBMIT_SETTLE);
+        if observed || settled {
+            self.pending_submit = None;
+        }
+        observed || settled
+    }
+}
 
 /// Stateful OS telemetry collector that caches battery status, tracks CPU tick deltas,
 /// and samples foreground process CWD, Git branch, `when_files` markers, and command name
@@ -16,7 +52,9 @@ use std::time::{Duration, Instant};
 #[derive(Debug)]
 pub(crate) struct SystemProbes {
     last_raw_cwd: Option<PathBuf>,
-    last_fg_process: Option<String>,
+    completion: CommandCompletion,
+    git_head: Option<PathBuf>,
+    git_head_mtime: Option<SystemTime>,
     cached_git_branch: Option<String>,
     watched_markers: BTreeSet<String>,
     cached_found_markers: BTreeSet<String>,
@@ -32,7 +70,9 @@ impl Default for SystemProbes {
     fn default() -> Self {
         Self {
             last_raw_cwd: None,
-            last_fg_process: None,
+            completion: CommandCompletion::default(),
+            git_head: None,
+            git_head_mtime: None,
             cached_git_branch: None,
             watched_markers: BTreeSet::new(),
             cached_found_markers: BTreeSet::new(),
@@ -61,17 +101,22 @@ impl SystemProbes {
     }
 
     /// Samples the child PTY's foreground process group for CWD, Git branch, foreground command,
-    /// which of `watched_markers` exist in the CWD or its ancestors, cached battery status, and
-    /// system CPU load percentage (`0..=100`).
+    /// whether a command finished, which of `watched_markers` exist in the CWD or its ancestors,
+    /// cached battery status, and system CPU load percentage (`0..=100`).
     ///
-    /// Git branch and markers touch the filesystem only when the CWD changes, a foreground
-    /// command finishes, or the watched marker set changes.
+    /// `line_submitted_at` is when the user last pressed Enter, if since the previous sample;
+    /// it lets commands that start and finish between two samples count as finished.
+    ///
+    /// The Git branch is re-read when its `HEAD` file changes (one `stat` per sample); the
+    /// repository and markers are looked up again only when the CWD changes, a command
+    /// finishes, or the watched marker set changes.
     pub fn sample(
         &mut self,
         pty_master_fd: libc::c_int,
         child_pid: libc::pid_t,
         now: Instant,
         watched_markers: &BTreeSet<String>,
+        line_submitted_at: Option<Instant>,
     ) -> BuiltinValues {
         let fg_pid = unsafe {
             let pgrp = libc::tcgetpgrp(pty_master_fd);
@@ -84,7 +129,10 @@ impl SystemProbes {
         } else {
             None
         };
-        self.refresh_cwd_derived(raw_cwd.clone(), fg_process.clone(), watched_markers);
+        let command_finished = self
+            .completion
+            .observe(fg_pid != child_pid, line_submitted_at, now);
+        self.refresh_cwd_derived(raw_cwd.clone(), command_finished, watched_markers);
         let cwd = raw_cwd.map(|p| shorten_home(&p));
 
         // Drain any async battery sample from the background worker thread
@@ -117,6 +165,7 @@ impl SystemProbes {
             git_branch: self.cached_git_branch.clone(),
             battery: self.cached_battery,
             fg_process,
+            command_finished,
             cpu_usage,
             found_markers: self.cached_found_markers.clone(),
         }
@@ -125,15 +174,19 @@ impl SystemProbes {
     fn refresh_cwd_derived(
         &mut self,
         raw_cwd: Option<PathBuf>,
-        fg_process: Option<String>,
+        command_finished: bool,
         watched_markers: &BTreeSet<String>,
     ) {
-        let cwd_changed = raw_cwd != self.last_raw_cwd;
-        let cmd_finished = self.last_fg_process.is_some() && fg_process.is_none();
-        if cwd_changed || cmd_finished {
-            self.cached_git_branch = raw_cwd.as_deref().and_then(resolve_git_branch);
+        let relocate = raw_cwd != self.last_raw_cwd || command_finished;
+        if relocate {
+            self.git_head = raw_cwd.as_deref().and_then(find_git_head);
         }
-        if cwd_changed || cmd_finished || *watched_markers != self.watched_markers {
+        let head_mtime = self.git_head.as_deref().and_then(modified_time);
+        if relocate || head_mtime != self.git_head_mtime {
+            self.cached_git_branch = self.git_head.as_deref().and_then(read_git_branch);
+            self.git_head_mtime = head_mtime;
+        }
+        if relocate || *watched_markers != self.watched_markers {
             self.cached_found_markers = raw_cwd
                 .as_deref()
                 .map(|dir| find_markers(dir, watched_markers))
@@ -141,7 +194,6 @@ impl SystemProbes {
             self.watched_markers = watched_markers.clone();
         }
         self.last_raw_cwd = raw_cwd;
-        self.last_fg_process = fg_process;
     }
 
     /// Samples system-wide CPU usage percentage at ~1s intervals (plus an initial baseline on frame 1).
@@ -231,35 +283,34 @@ fn find_markers(start_dir: &Path, markers: &BTreeSet<String>) -> BTreeSet<String
         .collect()
 }
 
-pub(crate) fn resolve_git_branch(start_dir: &Path) -> Option<String> {
-    let mut current = Some(start_dir);
-    while let Some(dir) = current {
+fn modified_time(path: &Path) -> Option<SystemTime> {
+    fs::metadata(path).ok()?.modified().ok()
+}
+
+/// Finds the `HEAD` file of the Git repository (or worktree) containing `start_dir`.
+fn find_git_head(start_dir: &Path) -> Option<PathBuf> {
+    start_dir.ancestors().find_map(|dir| {
         let dot_git = dir.join(".git");
-        let head_path = if dot_git.is_dir() {
+        if dot_git.is_dir() {
             Some(dot_git.join("HEAD"))
         } else if dot_git.is_file() {
             let content = fs::read_to_string(&dot_git).ok()?;
             let gitdir = content.strip_prefix("gitdir:")?.trim();
-            let resolved = dir.join(gitdir);
-            Some(resolved.join("HEAD"))
+            Some(dir.join(gitdir).join("HEAD"))
         } else {
             None
-        };
-
-        if let Some(head_file) = head_path
-            && let Ok(head_contents) = fs::read_to_string(head_file)
-        {
-            let trimmed = head_contents.trim();
-            if let Some(branch) = trimmed.strip_prefix("ref: refs/heads/") {
-                return Some(format!("git:{branch}"));
-            }
-            if trimmed.len() >= 7 {
-                return Some(format!("git:{}", &trimmed[..7]));
-            }
         }
-        current = dir.parent();
+    })
+}
+
+/// Reads the branch name (or short detached commit) from a `HEAD` file as `git:<name>`.
+fn read_git_branch(head: &Path) -> Option<String> {
+    let contents = fs::read_to_string(head).ok()?;
+    let trimmed = contents.trim();
+    if let Some(branch) = trimmed.strip_prefix("ref: refs/heads/") {
+        return Some(format!("git:{branch}"));
     }
-    None
+    (trimmed.len() >= 7).then(|| format!("git:{}", &trimmed[..7]))
 }
 
 #[cfg(target_os = "macos")]
@@ -392,58 +443,103 @@ fn probe_battery() -> Option<u8> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn rechecks_git_branch_and_markers_only_on_cwd_change_or_command_finish() {
-        let root = std::env::temp_dir().join(format!("thud-probe-memo-{}", std::process::id()));
-        let nested = root.join("crate");
+    /// Rewrites `HEAD` with a distinct mtime so the change is visible even within one tick.
+    fn write_head(root: &Path, contents: &str, mtime_secs: u64) {
+        let head = root.join(".git/HEAD");
+        fs::write(&head, contents).unwrap();
+        fs::File::options()
+            .write(true)
+            .open(&head)
+            .unwrap()
+            .set_modified(SystemTime::UNIX_EPOCH + Duration::from_secs(mtime_secs))
+            .unwrap();
+    }
+
+    fn temp_repo(name: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!("thud-{name}-{}", std::process::id()));
         fs::create_dir_all(root.join(".git")).unwrap();
-        fs::create_dir_all(&nested).unwrap();
-        fs::write(root.join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
-        let watched: BTreeSet<String> = ["Cargo.toml".to_string()].into();
+        fs::create_dir_all(root.join("crate")).unwrap();
+        root
+    }
+
+    #[test]
+    fn follows_head_changes_without_a_command_finishing() {
+        let root = temp_repo("probe-head");
+        let nested = root.join("crate");
+        write_head(&root, "ref: refs/heads/main\n", 1_000);
+        let none = BTreeSet::new();
 
         let mut probes = SystemProbes::new();
-        probes.refresh_cwd_derived(Some(nested.clone()), None, &watched);
+        probes.refresh_cwd_derived(Some(nested.clone()), false, &none);
         assert_eq!(probes.cached_git_branch.as_deref(), Some("git:main"));
-        assert!(probes.cached_found_markers.is_empty());
 
-        // A command creates a marker and switches branch: unchanged until it finishes.
-        fs::write(nested.join("Cargo.toml"), "").unwrap();
-        fs::write(root.join(".git/HEAD"), "ref: refs/heads/next\n").unwrap();
-        probes.refresh_cwd_derived(Some(nested.clone()), Some("cargo".to_string()), &watched);
-        assert_eq!(probes.cached_git_branch.as_deref(), Some("git:main"));
-        assert!(probes.cached_found_markers.is_empty());
-
-        probes.refresh_cwd_derived(Some(nested.clone()), None, &watched);
+        // e.g. `git switch` finished between two samples, or ran in another terminal / IDE
+        write_head(&root, "ref: refs/heads/next\n", 2_000);
+        probes.refresh_cwd_derived(Some(nested.clone()), false, &none);
         assert_eq!(probes.cached_git_branch.as_deref(), Some("git:next"));
-        assert_eq!(probes.cached_found_markers, watched);
 
-        // Leaving the tree clears the markers.
-        probes.refresh_cwd_derived(Some(root.clone()), None, &watched);
-        assert!(probes.cached_found_markers.is_empty());
+        write_head(&root, "0123456789abcdef0123456789abcdef01234567\n", 3_000);
+        probes.refresh_cwd_derived(Some(nested), false, &none);
+        assert_eq!(probes.cached_git_branch.as_deref(), Some("git:0123456"));
 
         let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
-    fn resolves_git_branch_from_ancestor_head_file() {
-        let root = std::env::temp_dir().join(format!("thud-git-probe-{}", std::process::id()));
-        let nested = root.join("src/deep");
-        fs::create_dir_all(root.join(".git")).unwrap();
-        fs::create_dir_all(&nested).unwrap();
+    fn rechecks_repository_and_markers_on_cwd_change_or_command_finish() {
+        let root = temp_repo("probe-markers");
+        let nested = root.join("crate");
+        let outside = std::env::temp_dir().join(format!("thud-probe-out-{}", std::process::id()));
+        fs::create_dir_all(&outside).unwrap();
+        write_head(&root, "ref: refs/heads/main\n", 1_000);
+        let watched: BTreeSet<String> = ["Cargo.toml".to_string()].into();
 
-        fs::write(root.join(".git/HEAD"), "ref: refs/heads/feature/hud\n").unwrap();
-        assert_eq!(
-            resolve_git_branch(&nested).as_deref(),
-            Some("git:feature/hud")
-        );
+        let mut probes = SystemProbes::new();
+        probes.refresh_cwd_derived(Some(nested.clone()), false, &watched);
+        assert!(probes.cached_found_markers.is_empty());
 
-        fs::write(
-            root.join(".git/HEAD"),
-            "0123456789abcdef0123456789abcdef01234567\n",
-        )
-        .unwrap();
-        assert_eq!(resolve_git_branch(&nested).as_deref(), Some("git:0123456"));
+        // A command creates a marker: picked up only once it finishes.
+        fs::write(nested.join("Cargo.toml"), "").unwrap();
+        probes.refresh_cwd_derived(Some(nested.clone()), false, &watched);
+        assert!(probes.cached_found_markers.is_empty());
+        probes.refresh_cwd_derived(Some(nested.clone()), true, &watched);
+        assert_eq!(probes.cached_found_markers, watched);
+
+        // `git init` outside a repository is found once the command finishes.
+        probes.refresh_cwd_derived(Some(outside.clone()), false, &watched);
+        assert_eq!(probes.cached_git_branch, None);
+        assert!(probes.cached_found_markers.is_empty());
+        fs::create_dir_all(outside.join(".git")).unwrap();
+        fs::write(outside.join(".git/HEAD"), "ref: refs/heads/trunk\n").unwrap();
+        probes.refresh_cwd_derived(Some(outside.clone()), true, &watched);
+        assert_eq!(probes.cached_git_branch.as_deref(), Some("git:trunk"));
 
         let _ = fs::remove_dir_all(&root);
+        let _ = fs::remove_dir_all(&outside);
+    }
+
+    #[test]
+    fn detects_commands_too_short_to_be_sampled_in_the_foreground() {
+        let t0 = Instant::now();
+        let ms = |n| t0 + Duration::from_millis(n);
+        let mut completion = CommandCompletion::default();
+
+        // Enter, command runs and exits between samples
+        assert!(
+            !completion.observe(false, Some(ms(0)), ms(40)),
+            "too early to tell"
+        );
+        assert!(completion.observe(false, None, ms(290)));
+        assert!(!completion.observe(false, None, ms(540)), "reported once");
+
+        // A command seen in the foreground is reported when it leaves
+        assert!(!completion.observe(false, Some(ms(600)), ms(610)));
+        assert!(!completion.observe(true, None, ms(860)));
+        assert!(completion.observe(false, None, ms(1110)));
+        assert!(!completion.observe(false, None, ms(1360)));
+
+        // Enter inside a full-screen app does not count when it is still running
+        assert!(!completion.observe(true, Some(ms(1400)), ms(1610)));
+        assert!(!completion.observe(true, None, ms(1860)));
     }
 }

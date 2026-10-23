@@ -183,7 +183,7 @@ Automatically tracks the working directory of the child shell via OS process ins
 ```
 
 #### 2. `git_branch` — Git Branch & Worktree Status
-Inspects the `.git` directory of the active working directory (walking up parent directories). Re-resolved when `cwd` changes or a foreground command finishes (e.g. after `git switch`). Hidden automatically when outside a Git repository.
+Inspects the `.git` directory of the active working directory (walking up parent directories). Updates as soon as the repository's `HEAD` changes (e.g. `git switch`, including switches made from another terminal or your editor). Hidden automatically when outside a Git repository.
 ```toml
 { type = "git_branch", icon = "", padding = true, bold = true }
 ```
@@ -262,7 +262,7 @@ Executes `sh -c "<cmd>"` in the **child shell's current working directory** and 
 | `cmd` | `String` | *(required)* | Shell command executed via `sh -c` with its working directory set to the child shell's active `cwd`. |
 | `trigger` | `String` | `"change"` (or `"interval"` if `interval_ms` is set) | Execution policy:<br>- `"change"`: Runs on startup, whenever `cwd` changes, and whenever an interactive foreground command in the shell finishes.<br>- `"cwd"`: Runs only on startup and whenever `cwd` changes.<br>- `"interval"`: Runs periodically every `interval_ms` milliseconds. |
 | `interval_ms` | `u64` (optional) | `5000` (when `trigger = "interval"`) | Polling interval in milliseconds when using periodic execution. |
-| `when_files` | `Array<String>` | `[]` | Project file guard. When non-empty (e.g., `["Cargo.toml"]` or `[".nvmrc", "package.json"]`), the command is only executed if at least one listed file/directory exists in `cwd` or any of its parent directories. Presence is re-checked when `cwd` changes or a foreground command finishes (so a file created by e.g. `cargo init` is picked up after the command exits). When leaving a matching directory, the cached output is cleared immediately. |
+| `when_files` | `Array<String>` | `[]` | Project file guard. When non-empty (e.g., `["Cargo.toml"]` or `[".nvmrc", "package.json"]`), the command is only executed if at least one listed file/directory exists in `cwd` or any of its parent directories. Presence is re-checked when `cwd` changes or a command you run in the shell finishes (so a file created by e.g. `cargo init` is picked up right after it exits). When leaving a matching directory, the cached output is cleared immediately. |
 
 ---
 

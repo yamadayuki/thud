@@ -3,7 +3,7 @@ type: Architecture
 title: "Deep Compositor & Session Module Architecture"
 description: Two-tier deep module design pairing a deterministic Sans-I/O Compositor core with a declarative Session runner.
 tags: [architecture, codebase-design, compositor, seam, sans-io]
-generated: { by: claude-code/claude-opus-5-5, at: "2026-10-22T22:42:10Z" }
+generated: { by: claude-code/claude-opus-5-5, at: "2026-10-23T02:31:19Z" }
 status: stable
 ---
 
@@ -109,7 +109,7 @@ flowchart TB
   - `pty.rs` (`OsChildPty`): Manages `forkpty`, `TIOCSWINSZ`, non-blocking PTY I/O, child lifecycle cleanup (`SIGHUP` on drop), and explicitly sets the child session variables (`THUD_SOCKET`, `THUD_ACTIVE`, `THUD_TTY`; `THUD_TTY` removed when the host TTY has no name).
   - `inherited.rs` (`InheritedSession`, ADR-006): Reads the inherited `THUD_*` variables once and classifies the launch as `Fresh`, `OtherTerminal`, `Stale`, or `Nested` from the current TTY and a socket liveness probe, as a pure function. `remove_socket_file` deletes a path only if it is a Unix socket.
   - `ipc.rs` (`OsIpcServer`): Non-blocking Unix domain socket listener and client message sender with automatic socket file removal on drop.
-  - `probes.rs` (`SystemProbes`): Stateful OS telemetry collector (`sample(master_fd, child_pid, now, watched_markers) -> BuiltinValues`) that re-resolves the Git branch and `when_files` markers only when the CWD changes or a foreground command finishes, plus an asynchronous background thread for battery sampling.
+  - `probes.rs` (`SystemProbes`): Stateful OS telemetry collector (`sample(master_fd, child_pid, now, watched_markers, line_submitted_at) -> BuiltinValues`). Decides `command_finished` (a command seen leaving the foreground, or the shell back in the foreground ≥100ms after a submitted line, so sub-tick commands count); re-locates the Git repository and `when_files` markers only on CWD change or command finish; re-reads the branch when the `HEAD` file's mtime changes (one `stat` per tick); samples battery on a background thread.
 - **Fail-Safe Session Lifecycle**:
   - Verifies socket liveness and TTY identity before asserting a nested session; a dead parent session's socket is removed and its variables are ignored. The thud process never mutates its own environment.
   - Supports `--force` (`-f`) override to bypass nested checks explicitly.

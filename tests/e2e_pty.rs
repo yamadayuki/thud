@@ -94,6 +94,24 @@ impl OuterTerminalSimulator {
         })
     }
 
+    /// Waits for the shell prompt, then types `line` and Enter. Typing ahead of the prompt is
+    /// unreliable: the shell may discard pending input when it resets the terminal.
+    fn type_command(&mut self, line: &str) {
+        assert!(
+            self.pump_until(Duration::from_secs(3), |screen| {
+                let (row, col) = screen.cursor_position();
+                let before_cursor: String = (0..col)
+                    .filter_map(|c| screen.cell(row, c))
+                    .map(|cell| cell.contents().to_string())
+                    .collect();
+                before_cursor.trim_end().ends_with('$')
+            }),
+            "shell prompt did not return; screen:\n{}",
+            self.vt.screen().contents()
+        );
+        self.send_keys(format!("{line}\r").as_bytes()).unwrap();
+    }
+
     fn send_keys(&mut self, bytes: &[u8]) -> io::Result<()> {
         let mut rem = bytes;
         while !rem.is_empty() {
@@ -246,25 +264,38 @@ fn e2e_outer_pty_interactive_input_status_bar_ipc_and_clean_exit() {
         "expected git branch on bottom status bar row 23, got: {bottom_row:?}"
     );
 
+    // A branch switch by a command too short to be sampled still updates the status bar
+    term.type_command("printf 'ref: refs/heads/switched\\n' > .git/HEAD");
+    assert!(
+        term.pump_until(Duration::from_secs(2), |screen| {
+            screen.contents().contains("git:switched")
+        }),
+        "branch switch not reflected in the status bar; row 23: {:?}",
+        term.row_text(23)
+    );
+
     // 2. Send real interactive keystrokes through outer PTY -> thud STDIN -> child shell
     let bin_path = env!("CARGO_BIN_EXE_thud");
-    let cmd = format!("echo E2E_TYPING_WORKS && {bin_path} set status LIVE_IPC_OK\r");
-    term.send_keys(cmd.as_bytes()).unwrap();
+    term.type_command(&format!(
+        "echo E2E_TYPING_WORKS && {bin_path} set status LIVE_IPC_OK"
+    ));
 
     assert!(
         term.pump_until(Duration::from_secs(3), |screen| {
-            let contents = screen.contents();
-            contents.contains("E2E_TYPING_WORKS") && contents.contains("LIVE_IPC_OK")
+            let status_row: String = (0..80)
+                .filter_map(|c| screen.cell(23, c))
+                .map(|cell| cell.contents().to_string())
+                .collect();
+            screen.contents().contains("\nE2E_TYPING_WORKS") && status_row.contains("LIVE_IPC") // clipped by the right section at 80 cols
         }),
         "interactive typing or IPC slot update failed; screen:\n{}",
         term.vt.screen().contents()
     );
 
     // 3. Test stacked toasts, progress bar IPC, and Zen Mode hotkey (Ctrl+\ = 0x1c)
-    let hud_cmd = format!(
-        "{bin_path} toast FIRST_TOAST --level info && {bin_path} toast SECOND_TOAST --level success && {bin_path} progress deploy 50 --label Deploying\r"
-    );
-    term.send_keys(hud_cmd.as_bytes()).unwrap();
+    term.type_command(&format!(
+        "{bin_path} toast FIRST_TOAST --level info && {bin_path} toast SECOND_TOAST --level success && {bin_path} progress deploy 50 --label Deploying"
+    ));
     assert!(
         term.pump_until(Duration::from_secs(3), |screen| {
             let contents = screen.contents();
@@ -319,7 +350,7 @@ fn e2e_outer_pty_interactive_input_status_bar_ipc_and_clean_exit() {
     );
 
     // 4. Exit shell and verify thud exits with code 0 and leaves alternate screen (?1049l)
-    term.send_keys(b"exit\r").unwrap();
+    term.type_command("exit");
     let exit_code = term.wait_exit(Duration::from_secs(3));
     assert_eq!(exit_code, Some(0), "expected clean exit code 0");
     assert!(

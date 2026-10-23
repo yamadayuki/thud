@@ -75,7 +75,7 @@ impl TelemetryStore {
     ) -> TickChanges {
         let changes = TickChanges {
             cwd_changed: self.builtins.cwd != builtins.cwd && builtins.cwd.is_some(),
-            cmd_finished: self.builtins.fg_process.is_some() && builtins.fg_process.is_none(),
+            cmd_finished: builtins.command_finished,
         };
 
         self.wall_clock = wall_clock;

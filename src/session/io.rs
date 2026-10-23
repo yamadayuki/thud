@@ -54,11 +54,13 @@ pub(crate) trait SessionIo {
     fn spawn_command(&mut self, key: CommandKey, cmd: String);
     fn drain_finished_commands(&mut self) -> Vec<(CommandKey, Option<String>)>;
     /// Samples builtin telemetry, including which of `watched_markers` exist in the CWD or
-    /// its ancestors.
+    /// its ancestors. `line_submitted_at` is when a line was last submitted to the child,
+    /// if one was since the previous sample.
     fn sample_builtins(
         &mut self,
         now: Instant,
         watched_markers: &BTreeSet<String>,
+        line_submitted_at: Option<Instant>,
     ) -> BuiltinValues;
 
     /// Returns true when the config source changed since the last `load_config`.
@@ -228,9 +230,15 @@ impl SessionIo for OsSessionIo {
         &mut self,
         now: Instant,
         watched_markers: &BTreeSet<String>,
+        line_submitted_at: Option<Instant>,
     ) -> BuiltinValues {
-        self.probes
-            .sample(self.pty.master_fd, self.pty.child_pid, now, watched_markers)
+        self.probes.sample(
+            self.pty.master_fd,
+            self.pty.child_pid,
+            now,
+            watched_markers,
+            line_submitted_at,
+        )
     }
 
     fn config_changed(&mut self) -> bool {
