@@ -1,4 +1,7 @@
 ## 2026-10-23
+* **Update**: Linked `decisions/adr-009-mouse-capture-modes.md` to `architecture/compositor-module.md` (changes how the Compositor decides host mouse reporting).
+* **Update**: Linked `decisions/adr-009-mouse-capture-modes.md` to `decisions/adr-008-input-router-and-host-mode-mirroring.md` (extends host mode mirroring and InputRouter to mouse tracking modes and encodings).
+* **Creation**: Documented concept `decisions/adr-009-mouse-capture-modes.md` (ADR-009: Mouse Capture Modes for Native Text Selection).
 * **Update**: Updated concept `architecture/compositor-module.md`.
 * **Update**: Updated concept `decisions/adr-005-command-scheduler-and-typed-command-keys.md`.
 

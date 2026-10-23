@@ -1,3 +1,5 @@
+use crate::compositor::vt::MouseEncoding;
+
 const PASTE_START: &[u8] = b"\x1b[200~";
 const PASTE_END: &[u8] = b"\x1b[201~";
 /// Lines scrolled per mouse wheel notch on the primary screen.
@@ -11,6 +13,8 @@ pub(crate) enum InputAction {
     /// Return the viewport to the live bottom of the scrollback.
     SnapBack,
     ToggleZen,
+    /// Invert mouse capture, or return to the configured `mouse` mode.
+    ToggleMouse,
     Reload,
     /// A line was submitted to the child (Enter outside a bracketed paste).
     Submit,
@@ -28,8 +32,11 @@ pub(crate) struct RoutedInput {
 pub(crate) struct InputContext {
     pub zen_key: Option<u8>,
     pub reload_key: Option<u8>,
+    pub mouse_key: Option<u8>,
     /// The child enabled mouse tracking, so mouse reports are forwarded to it.
     pub child_wants_mouse: bool,
+    /// Encoding the child requested for forwarded mouse reports.
+    pub child_mouse_encoding: MouseEncoding,
     pub alternate_screen: bool,
     /// Host row of the child viewport's top edge, subtracted from SGR mouse rows.
     pub child_top: u16,
@@ -86,7 +93,7 @@ impl InputRouter {
             }
 
             if let Some(ev) = parse_mouse_event(rest) {
-                route_mouse(&ev, &rest[..ev.len], ctx, &mut out);
+                route_mouse(&ev, ctx, &mut out);
                 forwarding = false;
                 i += ev.len;
                 continue;
@@ -98,6 +105,9 @@ impl InputRouter {
                 forwarding = false;
             } else if Some(b) == ctx.reload_key {
                 out.actions.push(InputAction::Reload);
+                forwarding = false;
+            } else if Some(b) == ctx.mouse_key {
+                out.actions.push(InputAction::ToggleMouse);
                 forwarding = false;
             } else {
                 if !forwarding {
@@ -115,18 +125,9 @@ impl InputRouter {
     }
 }
 
-fn route_mouse(ev: &ParsedMouseEvent, raw: &[u8], ctx: &InputContext, out: &mut RoutedInput) {
+fn route_mouse(ev: &ParsedMouseEvent, ctx: &InputContext, out: &mut RoutedInput) {
     if ctx.child_wants_mouse {
-        if ev.is_sgr {
-            let row = ev.row.saturating_sub(ctx.child_top).max(1);
-            let suffix = if ev.release { 'm' } else { 'M' };
-            let _ = std::io::Write::write_fmt(
-                &mut out.to_child,
-                format_args!("\x1b[<{};{};{}{}", ev.btn, ev.col, row, suffix),
-            );
-        } else {
-            out.to_child.extend_from_slice(raw);
-        }
+        encode_for_child(ev, ctx, &mut out.to_child);
     } else if ctx.alternate_screen {
         match ev.kind {
             MouseEventKind::WheelUp => out.to_child.extend_from_slice(b"\x1b[A"),
@@ -138,6 +139,40 @@ fn route_mouse(ev: &ParsedMouseEvent, raw: &[u8], ctx: &InputContext, out: &mut 
             MouseEventKind::WheelUp => out.actions.push(InputAction::ScrollUp(WHEEL_LINES)),
             MouseEventKind::WheelDown => out.actions.push(InputAction::ScrollDown(WHEEL_LINES)),
             MouseEventKind::Other => {}
+        }
+    }
+}
+
+/// Re-encodes a host mouse report for the child: rows shift by the child viewport's top edge,
+/// and the encoding follows what the child requested.
+fn encode_for_child(ev: &ParsedMouseEvent, ctx: &InputContext, out: &mut Vec<u8>) {
+    let row = ev.row.saturating_sub(ctx.child_top).max(1);
+    match ctx.child_mouse_encoding {
+        MouseEncoding::Sgr => {
+            let suffix = if ev.release { 'm' } else { 'M' };
+            let _ = std::io::Write::write_fmt(
+                out,
+                format_args!("\x1b[<{};{};{}{}", ev.btn, ev.col, row, suffix),
+            );
+        }
+        encoding @ (MouseEncoding::Classic | MouseEncoding::Utf8) => {
+            // Classic reports cannot say which button was released.
+            let button = if ev.release {
+                (ev.btn & !0b11) | 3
+            } else {
+                ev.btn
+            };
+            out.extend_from_slice(b"\x1b[M");
+            for value in [button, ev.col, row] {
+                let code = u32::from(value) + 32;
+                if encoding == MouseEncoding::Classic {
+                    out.push(code.min(255) as u8);
+                } else {
+                    let ch = char::from_u32(code.min(2047)).unwrap_or(' ');
+                    let mut utf8 = [0u8; 4];
+                    out.extend_from_slice(ch.encode_utf8(&mut utf8).as_bytes());
+                }
+            }
         }
     }
 }

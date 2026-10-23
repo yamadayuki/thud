@@ -264,6 +264,29 @@ fn e2e_outer_pty_interactive_input_status_bar_ipc_and_clean_exit() {
         "expected git branch on bottom status bar row 23, got: {bottom_row:?}"
     );
 
+    // At the shell the outer terminal keeps its own text selection (no mouse reporting);
+    // Ctrl+^ captures the mouse for wheel scrollback and pressing it again releases it.
+    assert_eq!(
+        term.vt.screen().mouse_protocol_mode(),
+        vt100::MouseProtocolMode::None
+    );
+    term.send_keys(b"\x1e").unwrap();
+    assert!(
+        term.pump_until(Duration::from_secs(2), |screen| {
+            screen.mouse_protocol_mode() == vt100::MouseProtocolMode::PressRelease
+                && screen.contents().contains("Mouse: thud (scroll)")
+        }),
+        "mouse_toggle_key did not capture the mouse; screen:\n{}",
+        term.vt.screen().contents()
+    );
+    term.send_keys(b"\x1e").unwrap();
+    assert!(
+        term.pump_until(Duration::from_secs(2), |screen| {
+            screen.mouse_protocol_mode() == vt100::MouseProtocolMode::None
+        }),
+        "mouse_toggle_key did not release the mouse"
+    );
+
     // A branch switch by a command too short to be sampled still updates the status bar
     term.type_command("printf 'ref: refs/heads/switched\\n' > .git/HEAD");
     assert!(

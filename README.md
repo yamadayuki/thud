@@ -55,6 +55,7 @@ It wraps any interactive shell (`fish`, `zsh`, `bash`, `nu`, etc.) inside a tran
 - **Auto-reload on save**: Saving `~/.config/thud/config.toml` automatically reloads the HUD within 250ms (showing an error toast if TOML syntax is invalid while keeping the current config active).
 - **`Ctrl+\`** (`zen_toggle_key`): Toggle **Zen Mode** (instantly hide/show all HUD chrome).
 - **`Ctrl+]`** (`reload_key`) or `thud reload`: Manually reload `config.toml` at any time.
+- **`Ctrl+^`** (`mouse_toggle_key`): Toggle mouse capture. By default (`mouse = "auto"`) thud only takes the mouse while the app inside asks for it, so you can select and copy terminal text at the shell prompt.
 
 ### 6. High-Performance Frame Pacing & Zero-Allocation UI Engine
 - **Decoupled PTY Ingestion & 144 FPS Frame Pacing**: High-bandwidth child output (e.g. streaming logs) is ingested immediately into the virtual screen parser without stalling the child shell, while frame composition is paced at up to ~144 FPS (6.9ms).
@@ -167,6 +168,8 @@ thud reload
 theme = "tokyo_night"
 zen_toggle_key = "ctrl-\\"
 reload_key = "ctrl-]"
+mouse = "auto"
+mouse_toggle_key = "ctrl-^"
 
 [status_bar]
 enabled = true

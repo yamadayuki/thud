@@ -40,9 +40,11 @@ Top-level keys must appear at the very top of `config.toml` (before any `[table]
 | `ipc_socket` | `String` (optional) | `/tmp/thud-<pid>.sock` | Explicit Unix domain socket path for IPC commands. |
 | `zen_toggle_key` | `String` (optional) | `"ctrl-\\"` | Hotkey to toggle **Zen Mode** (hides all HUD elements and expands the child PTY to full terminal height). Set to `""` to disable. |
 | `reload_key` | `String` (optional) | `"ctrl-]"` | Hotkey to manually reload `config.toml`. Set to `""` to disable. |
+| `mouse` | `String` | `"auto"` | When thud captures the mouse (which disables your terminal's own text selection): `"auto"` only while the app inside requests the mouse (vim, htop, …), so you can select and copy at the shell prompt; `"always"` always (the wheel scrolls thud's scrollback at the shell); `"off"` never. |
+| `mouse_toggle_key` | `String` (optional) | `"ctrl-^"` | Hotkey that inverts mouse capture until pressed again, e.g. to scroll with the wheel at the shell or to select text inside vim. Shows a toast with the new state. Set to `""` to disable. |
+| `scrollback_lines` | `Integer` | `10000` | Maximum number of scrollback lines retained in memory for mousewheel history scrolling. |
 
 Hotkeys accept `ctrl-a`..`ctrl-z`, `ctrl-\`, `ctrl-]`, `ctrl-^`, `ctrl-_`, and `ctrl-space`. Any other value is reported as a config error (at startup, or as an error toast on live reload). Hotkey bytes inside a bracketed paste are passed to the shell untouched.
-| `scrollback_lines` | `Integer` | `10000` | Maximum number of scrollback lines retained in memory for mousewheel history scrolling. |
 
 ### Supported Hotkey Syntax
 Hotkeys intercept a single raw ASCII control character before it reaches the child PTY:
