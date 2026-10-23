@@ -1,3 +1,7 @@
+## 2026-10-23
+* **Update**: Updated concept `architecture/compositor-module.md`.
+* **Update**: Updated concept `decisions/adr-005-command-scheduler-and-typed-command-keys.md`.
+
 ## 2026-10-22
 * **Update**: Linked `decisions/adr-008-input-router-and-host-mode-mirroring.md` to `decisions/adr-004-session-loop-and-session-io-seam.md` (relies on the reload error toast and OS adapter exit restore defined by ADR-004).
 * **Update**: Linked `decisions/adr-008-input-router-and-host-mode-mirroring.md` to `architecture/compositor-module.md` (adds InputRouter to the Compositor module and mirrors child terminal modes to the host).

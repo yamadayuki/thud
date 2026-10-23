@@ -28,6 +28,9 @@ pub struct BuiltinValues {
     pub battery: Option<u8>,
     /// Active foreground process name inside the child PTY (None if idle at the root shell).
     pub fg_process: Option<String>,
+    /// A foreground command finished since the previous tick, including commands too short to
+    /// be sampled while running.
+    pub command_finished: bool,
     /// System-wide CPU load percentage (`0..=100`), automatically feeding the `"cpu"` metric slot.
     pub cpu_usage: Option<u8>,
     /// `when_files` marker names (see `Compositor::watched_markers`) found in the CWD or its ancestors.
@@ -74,6 +77,8 @@ pub struct Transition {
     pub due_commands: Vec<DueCommand>,
     /// True when the user pressed `reload_key` or sent `IpcMessage::ReloadConfig`.
     pub reload_config: bool,
+    /// True when host input submitted a line (Enter) to the child outside a paste.
+    pub line_submitted: bool,
 }
 
 /// Sans-I/O Deep Module that orchestrates virtual terminal emulation (`VtScreenAdapter`),
@@ -135,6 +140,7 @@ impl Compositor {
                 child_pty_resize: Some(child_size),
                 due_commands,
                 reload_config: false,
+                line_submitted: false,
             },
         ))
     }
@@ -147,6 +153,7 @@ impl Compositor {
         let mut child_pty_resize = None;
         let mut due_commands = Vec::new();
         let mut reload_config = false;
+        let mut line_submitted = false;
 
         match event {
             Event::HostInput(bytes) => {
@@ -176,6 +183,7 @@ impl Compositor {
                             child_pty_resize = Some(new_child_size);
                         }
                         InputAction::Reload => reload_config = true,
+                        InputAction::Submit => line_submitted = true,
                     }
                 }
             }
@@ -235,6 +243,7 @@ impl Compositor {
             child_pty_resize,
             due_commands,
             reload_config,
+            line_submitted,
         }
     }
 
@@ -787,9 +796,9 @@ mod tests {
         assert!(init_tx.due_commands.is_empty());
         assert_eq!(comp.watched_markers(), ["Cargo.toml".to_string()].into());
 
-        let in_crate = |fg_process: Option<&str>| BuiltinValues {
+        let in_crate = |command_finished: bool| BuiltinValues {
             cwd: Some("~/thud/src".to_string()),
-            fg_process: fg_process.map(str::to_string),
+            command_finished,
             found_markers: ["Cargo.toml".to_string()].into(),
             ..BuiltinValues::default()
         };
@@ -799,21 +808,17 @@ mod tests {
         };
 
         // 1. Enter a directory whose ancestors contain `Cargo.toml` -> due!
-        let tx1 = comp.step(tick(in_crate(None)), now);
+        let tx1 = comp.step(tick(in_crate(false)), now);
         assert_eq!(tx1.due_commands, vec![due("rust", "rustc -V")]);
         comp.step(finished("rust", "1.85.0"), now);
         assert!(comp.rendered_text().contains("1.85.0"));
 
         // 2. Same directory, no foreground command completion -> NOT due
-        let tx2 = comp.step(tick(in_crate(None)), now + Duration::from_secs(10));
+        let tx2 = comp.step(tick(in_crate(false)), now + Duration::from_secs(10));
         assert!(tx2.due_commands.is_empty());
 
-        // 3. Foreground command starts and then finishes -> due again!
-        comp.step(
-            tick(in_crate(Some("rustup"))),
-            now + Duration::from_secs(11),
-        );
-        let tx3 = comp.step(tick(in_crate(None)), now + Duration::from_secs(12));
+        // 3. A foreground command finishes -> due again!
+        let tx3 = comp.step(tick(in_crate(true)), now + Duration::from_secs(12));
         assert_eq!(tx3.due_commands, vec![due("rust", "rustc -V")]);
 
         // 4. Leave to a directory without `Cargo.toml` -> not due and cached output cleared
@@ -1095,6 +1100,21 @@ mod tests {
         comp.step(Event::PtyOutput(b"\x1b[?2004l\x1b[?1l\x1b>"), now);
         let disabled = comp.render(now).unwrap();
         assert!(disabled.starts_with(b"\x1b[?2004l\x1b[?1l\x1b>"));
+    }
+
+    #[test]
+    fn reports_submitted_lines_but_not_newlines_inside_pastes() {
+        let now = Instant::now();
+        let (mut comp, _) =
+            Compositor::new(TermSize { cols: 20, rows: 4 }, sample_config(), now).unwrap();
+
+        assert!(!comp.step(Event::HostInput(b"git st"), now).line_submitted);
+        assert!(comp.step(Event::HostInput(b"atus\r"), now).line_submitted);
+        assert!(
+            !comp
+                .step(Event::HostInput(b"\x1b[200~a\rb\x1b[201~"), now)
+                .line_submitted
+        );
     }
 
     #[test]

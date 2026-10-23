@@ -19,6 +19,8 @@ pub(crate) struct SessionLoop<Io: SessionIo> {
     compositor: Compositor,
     last_tick: Instant,
     last_frame: Instant,
+    /// When a line was last submitted to the child, until the next telemetry sample.
+    line_submitted_at: Option<Instant>,
     buf: Box<[u8; 8192]>,
 }
 
@@ -34,6 +36,7 @@ impl<Io: SessionIo> SessionLoop<Io> {
             compositor,
             last_tick: now,
             last_frame: now,
+            line_submitted_at: None,
             buf: Box::new([0u8; 8192]),
         };
         apply(&mut session.io, &init_tx)?;
@@ -93,6 +96,9 @@ impl<Io: SessionIo> SessionLoop<Io> {
                     Event::HostInput(&self.buf[..n]),
                     now,
                 )?;
+                if tx.line_submitted {
+                    self.line_submitted_at = Some(now);
+                }
                 if tx.reload_config {
                     self.reload(now)?;
                 }
@@ -162,7 +168,9 @@ impl<Io: SessionIo> SessionLoop<Io> {
     fn tick(&mut self, now: Instant) -> io::Result<()> {
         self.last_tick = now;
         let watched = self.compositor.watched_markers();
-        let builtins = self.io.sample_builtins(now, &watched);
+        let builtins = self
+            .io
+            .sample_builtins(now, &watched, self.line_submitted_at.take());
         let wall_clock = self.io.wall_clock();
         self.step(
             Event::Tick {
@@ -368,6 +376,23 @@ mod tests {
         });
         session.advance(TICK_INTERVAL);
         assert_eq!(session.io_mut().take_spawned().len(), 1);
+    }
+
+    #[test]
+    fn hands_submitted_lines_to_the_next_telemetry_sample() {
+        let mut session = start(text_bar_config("BAR"), MemorySessionIo::new(20, 4));
+
+        session.io_mut().push_host_input(b"ls");
+        session.advance(TICK_INTERVAL);
+        assert_eq!(session.io().line_submitted_at(), None);
+
+        session.io_mut().push_host_input(b"\r");
+        let submitted = session.io().now();
+        session.advance(TICK_INTERVAL);
+        assert_eq!(session.io().line_submitted_at(), Some(submitted));
+
+        session.advance(TICK_INTERVAL);
+        assert_eq!(session.io().line_submitted_at(), None, "handed over once");
     }
 
     #[test]

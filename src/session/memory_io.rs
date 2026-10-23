@@ -34,6 +34,7 @@ pub(crate) struct MemorySessionIo {
     child_exit: Option<i32>,
     finished_commands: VecDeque<(CommandKey, Option<String>)>,
     watched_markers: BTreeSet<String>,
+    line_submitted_at: Option<Instant>,
     builtins: BuiltinValues,
     cwd: Option<PathBuf>,
     config: Result<Config, ConfigError>,
@@ -62,6 +63,7 @@ impl MemorySessionIo {
             child_exit: None,
             finished_commands: VecDeque::new(),
             watched_markers: BTreeSet::new(),
+            line_submitted_at: None,
             builtins: BuiltinValues::default(),
             cwd: None,
             config: Ok(Config::default()),
@@ -144,6 +146,11 @@ impl MemorySessionIo {
     pub fn fail_command(&mut self, key: CommandKey) -> &mut Self {
         self.finished_commands.push_back((key, None));
         self
+    }
+
+    /// The submit time the loop last handed to `sample_builtins`, if any.
+    pub fn line_submitted_at(&self) -> Option<Instant> {
+        self.line_submitted_at
     }
 
     /// Marker names the loop last asked `sample_builtins` to look for.
@@ -273,8 +280,10 @@ impl SessionIo for MemorySessionIo {
         &mut self,
         _now: Instant,
         watched_markers: &BTreeSet<String>,
+        line_submitted_at: Option<Instant>,
     ) -> BuiltinValues {
         self.watched_markers = watched_markers.clone();
+        self.line_submitted_at = line_submitted_at;
         self.builtins.clone()
     }
 

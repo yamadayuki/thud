@@ -71,7 +71,7 @@ It wraps any interactive shell (`fish`, `zsh`, `bash`, `nu`, etc.) inside a tran
 - **Sans-I/O `Compositor` Core** (`src/compositor/`): Pure state machine that processes inputs (`step`) and renders double-buffered diffs (`render`), completely free of OS I/O or system clock queries.
 - **`SessionLoop` over a `SessionIo` Seam** (`src/session/`): One loop owns pacing (up to 144 FPS, immediate flush on keystrokes, 50ms idle wait), OS signal handling (`SIGWINCH`, `SIGTERM`, `SIGHUP`, `SIGINT`), IPC, periodic commands, telemetry ticks, and live config reload. It reaches the OS only through `SessionIo`, so tests drive the exact same loop with an in-memory adapter and a virtual clock.
 - **2D UI Buffer & Widget Seam** (`src/ui/`): Zero-allocation flat 2D `Cell` grid with inline scalar `char` storage, CJK wide-character boundary healing, and run-length cursor-tracked ANSI diff generation.
-- **Asynchronous Telemetry & Caching** (`src/session/probes.rs`): Git branch and `when_files` markers are resolved only when the CWD changes or a foreground command finishes, and battery probes run on a non-blocking background worker thread.
+- **Asynchronous Telemetry & Caching** (`src/session/probes.rs`): the Git branch follows `HEAD` with a single `stat` per tick, `when_files` markers are re-resolved only when the CWD changes or a command finishes (including commands shorter than a tick), and battery probes run on a non-blocking background worker thread.
 
 ```mermaid
 flowchart LR

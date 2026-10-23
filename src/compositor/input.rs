@@ -12,6 +12,8 @@ pub(crate) enum InputAction {
     SnapBack,
     ToggleZen,
     Reload,
+    /// A line was submitted to the child (Enter outside a bracketed paste).
+    Submit,
 }
 
 /// Host input split into bytes for the child and HUD actions.
@@ -103,6 +105,9 @@ impl InputRouter {
                     forwarding = true;
                 }
                 out.to_child.push(b);
+                if b == b'\r' || b == b'\n' {
+                    out.actions.push(InputAction::Submit);
+                }
             }
             i += 1;
         }
