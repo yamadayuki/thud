@@ -1,4 +1,11 @@
 ## 2026-10-23
+* **Update**: Updated concept `requirements/core-hud-capabilities.md`.
+* **Update**: Linked `decisions/adr-011-no-key-interception-or-mouse-capture.md` to `architecture/compositor-module.md` (removes hotkeys from InputRouter and mouse capture from the Compositor).
+* **Update**: Linked `decisions/adr-011-no-key-interception-or-mouse-capture.md` to `decisions/adr-010-rejected-thud-side-selection.md` (applies the HUD-only principle established when ADR-010 was rejected).
+* **Update**: Linked `decisions/adr-011-no-key-interception-or-mouse-capture.md` to `decisions/adr-009-mouse-capture-modes.md` (supersedes ADR-009's capture modes and mouse_toggle_key; keeps its mode mirroring).
+* **Creation**: Documented concept `decisions/adr-011-no-key-interception-or-mouse-capture.md` (ADR-011: No Key Interception or Mouse Capture; Zen via CLI).
+* **Update**: Linked `decisions/adr-010-rejected-thud-side-selection.md` to `decisions/adr-009-mouse-capture-modes.md` (rejects extending ADR-009's mouse capture with thud-side selection).
+* **Creation**: Documented concept `decisions/adr-010-rejected-thud-side-selection.md` (ADR-010 (Rejected): thud-Side Selection and Keyboard Mode Switching).
 * **Update**: Linked `decisions/adr-009-mouse-capture-modes.md` to `architecture/compositor-module.md` (changes how the Compositor decides host mouse reporting).
 * **Update**: Linked `decisions/adr-009-mouse-capture-modes.md` to `decisions/adr-008-input-router-and-host-mode-mirroring.md` (extends host mode mirroring and InputRouter to mouse tracking modes and encodings).
 * **Creation**: Documented concept `decisions/adr-009-mouse-capture-modes.md` (ADR-009: Mouse Capture Modes for Native Text Selection).

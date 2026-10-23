@@ -23,7 +23,6 @@ thud init-config --force
 ### Live Configuration Reload
 Changes to `config.toml` are applied to the running `thud` session **without restarting your shell**:
 - **Automatic Reload on Save**: `thud` checks the file modification timestamp (`mtime`) every 250ms and automatically reloads when the file is saved.
-- **Hotkey Reload**: Press `Ctrl+]` (configurable via `reload_key`) to trigger a manual reload at any time.
 - **CLI Reload**: Run `thud reload` inside or outside the session.
 - **Error Handling**: Reloads are silent when valid. If the TOML file contains a syntax or type error, `thud` keeps your previous working configuration active and displays an error toast in the corner with the parse failure details.
 
@@ -38,22 +37,7 @@ Top-level keys must appear at the very top of `config.toml` (before any `[table]
 | `theme` | `String` or `Table` | `"tokyo_night"` | Built-in theme preset name or inline/table palette overrides (see [Themes & Palette Overrides](#4-themes--palette-overrides)). |
 | `shell` | `String` (optional) | `$SHELL` (`"/bin/sh"`) | Default interactive shell executable to spawn when `--shell` is not passed on the CLI. |
 | `ipc_socket` | `String` (optional) | `/tmp/thud-<pid>.sock` | Explicit Unix domain socket path for IPC commands. |
-| `zen_toggle_key` | `String` (optional) | `"ctrl-\\"` | Hotkey to toggle **Zen Mode** (hides all HUD elements and expands the child PTY to full terminal height). Set to `""` to disable. |
-| `reload_key` | `String` (optional) | `"ctrl-]"` | Hotkey to manually reload `config.toml`. Set to `""` to disable. |
-| `mouse` | `String` | `"auto"` | When thud captures the mouse (which disables your terminal's own text selection): `"auto"` only while the app inside requests the mouse (vim, htop, …), so you can select and copy at the shell prompt; `"always"` always (the wheel scrolls thud's scrollback at the shell); `"off"` never. |
-| `mouse_toggle_key` | `String` (optional) | `"ctrl-^"` | Hotkey that inverts mouse capture until pressed again, e.g. to scroll with the wheel at the shell or to select text inside vim. Shows a toast with the new state. Set to `""` to disable. |
 | `scrollback_lines` | `Integer` | `10000` | Maximum number of scrollback lines retained in memory for mousewheel history scrolling. |
-
-Hotkeys accept `ctrl-a`..`ctrl-z`, `ctrl-\`, `ctrl-]`, `ctrl-^`, `ctrl-_`, and `ctrl-space`. Any other value is reported as a config error (at startup, or as an error toast on live reload). Hotkey bytes inside a bracketed paste are passed to the shell untouched.
-
-### Supported Hotkey Syntax
-Hotkeys intercept a single raw ASCII control character before it reaches the child PTY:
-- `"ctrl-a"` through `"ctrl-z"` (`0x01`..`0x1a`)
-- `"ctrl-\\"` or `"^\""` (`0x1c`)
-- `"ctrl-]"` or `"^]"` (`0x1d`)
-- `"ctrl-^"` (`0x1e`)
-- `"ctrl-_"` (`0x1f`)
-- `""` (empty string disables the hotkey)
 
 ---
 

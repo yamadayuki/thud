@@ -12,8 +12,8 @@ use crate::compositor::layout::PlacementSolver;
 use crate::compositor::painter::HudPainter;
 use crate::compositor::scheduler::{CommandScheduler, ScheduleContext, watched_markers};
 use crate::compositor::store::{TelemetryStore, TickChanges};
-use crate::compositor::vt::{MouseTracking, TerminalModes, VtScreenAdapter};
-use crate::config::{Config, ConfigError, IpcMessage, MouseMode, TermSize, ToastLevel, WidgetSpec};
+use crate::compositor::vt::{TerminalModes, VtScreenAdapter};
+use crate::config::{Config, ConfigError, IpcMessage, TermSize, WidgetSpec};
 use crate::ui::{Buffer, CellStyle};
 use chrono::{DateTime, Local};
 use std::collections::BTreeSet;
@@ -75,7 +75,7 @@ pub struct Transition {
     pub child_pty_resize: Option<TermSize>,
     /// Shell commands whose schedule is now due for async execution.
     pub due_commands: Vec<DueCommand>,
-    /// True when the user pressed `reload_key` or sent `IpcMessage::ReloadConfig`.
+    /// True when `IpcMessage::ReloadConfig` asked to reload the config source.
     pub reload_config: bool,
     /// True when host input submitted a line (Enter) to the child outside a paste.
     pub line_submitted: bool,
@@ -92,8 +92,6 @@ pub struct Compositor {
     scheduler: CommandScheduler,
     input: InputRouter,
     host_modes: TerminalModes,
-    /// Set by `mouse_toggle_key`: `Some(capture)` overrides `config.mouse` until pressed again.
-    mouse_override: Option<bool>,
     zen_mode: bool,
     dirty: bool,
     last_now: Instant,
@@ -124,7 +122,6 @@ impl Compositor {
             scheduler: CommandScheduler::default(),
             input: InputRouter::default(),
             host_modes: TerminalModes::default(),
-            mouse_override: None,
             zen_mode: false,
             dirty: false,
             last_now: now,
@@ -161,9 +158,6 @@ impl Compositor {
         match event {
             Event::HostInput(bytes) => {
                 let ctx = InputContext {
-                    zen_key: self.config.zen_toggle_key.map(|k| k.0),
-                    reload_key: self.config.reload_key.map(|k| k.0),
-                    mouse_key: self.config.mouse_toggle_key.map(|k| k.0),
                     child_wants_mouse: self.vt.wants_mouse(),
                     child_mouse_encoding: self.vt.mouse_encoding(),
                     alternate_screen: self.vt.is_alternate_screen(),
@@ -181,14 +175,6 @@ impl Compositor {
                         InputAction::ScrollUp(lines) => self.vt.scroll_up(lines),
                         InputAction::ScrollDown(lines) => self.vt.scroll_down(lines),
                         InputAction::SnapBack => self.vt.reset_scrollback(),
-                        InputAction::ToggleZen => {
-                            self.zen_mode = !self.zen_mode;
-                            let new_child_size = self.child_size();
-                            self.vt.set_size(new_child_size.cols, new_child_size.rows);
-                            child_pty_resize = Some(new_child_size);
-                        }
-                        InputAction::ToggleMouse => self.toggle_mouse_capture(now),
-                        InputAction::Reload => reload_config = true,
                         InputAction::Submit => line_submitted = true,
                     }
                 }
@@ -222,13 +208,17 @@ impl Compositor {
                     self.store.push_metric(sample.key, sample.value);
                 }
             }
-            Event::Ipc(msg) => {
-                if msg == IpcMessage::ReloadConfig {
-                    reload_config = true;
-                } else {
-                    self.store.apply_ipc(msg, now);
+            Event::Ipc(IpcMessage::ReloadConfig) => reload_config = true,
+            Event::Ipc(IpcMessage::Zen { enabled }) => {
+                let zen = enabled.unwrap_or(!self.zen_mode);
+                if zen != self.zen_mode {
+                    self.zen_mode = zen;
+                    let new_child_size = self.child_size();
+                    self.vt.set_size(new_child_size.cols, new_child_size.rows);
+                    child_pty_resize = Some(new_child_size);
                 }
             }
+            Event::Ipc(msg) => self.store.apply_ipc(msg, now),
             Event::ReloadConfig(new_config) => {
                 let old_child_size = self.child_size();
                 self.config = *new_config;
@@ -290,54 +280,6 @@ impl Compositor {
         self.zen_mode
     }
 
-    /// Whether thud currently receives mouse reports (which disables the terminal's own text
-    /// selection).
-    pub fn is_mouse_captured(&self) -> bool {
-        self.mouse_override.unwrap_or(match self.config.mouse {
-            MouseMode::Auto => self.vt.wants_mouse(),
-            MouseMode::Always => true,
-            MouseMode::Off => false,
-        })
-    }
-
-    /// The child's tracking level while it wants the mouse, or click/wheel reports when thud
-    /// captures the mouse for itself.
-    fn host_mouse_tracking(&self) -> MouseTracking {
-        if !self.is_mouse_captured() {
-            return MouseTracking::Off;
-        }
-        match self.vt.modes().mouse {
-            MouseTracking::Off => MouseTracking::Click,
-            child => child,
-        }
-    }
-
-    fn toggle_mouse_capture(&mut self, now: Instant) {
-        let message = match self.mouse_override {
-            Some(_) => {
-                self.mouse_override = None;
-                format!("Mouse: {}", self.config.mouse)
-            }
-            None => {
-                let capture = !self.is_mouse_captured();
-                self.mouse_override = Some(capture);
-                if capture {
-                    "Mouse: thud (scroll)".to_string()
-                } else {
-                    "Mouse: terminal (select)".to_string()
-                }
-            }
-        };
-        self.store.apply_ipc(
-            IpcMessage::Toast {
-                message,
-                level: ToastLevel::Info,
-                ttl_ms: 1500,
-            },
-            now,
-        );
-    }
-
     /// Marker file names referenced by `when_files` filters, to be resolved against the CWD
     /// and reported back through `BuiltinValues::found_markers`.
     pub fn watched_markers(&self) -> BTreeSet<String> {
@@ -376,10 +318,8 @@ impl Compositor {
         }
         self.current_buffer = buf;
 
-        let modes = TerminalModes {
-            mouse: self.host_mouse_tracking(),
-            ..self.vt.modes()
-        };
+        // The host reports the mouse exactly as the child requested; thud never captures it.
+        let modes = self.vt.modes();
         if modes == self.host_modes {
             return diff;
         }
@@ -433,7 +373,7 @@ pub(crate) fn effective_widgets<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{CollisionPolicy, Hotkey};
+    use crate::config::{CollisionPolicy, ToastLevel};
     use chrono::TimeZone;
     use std::time::Duration;
 
@@ -741,12 +681,10 @@ mod tests {
     }
 
     #[test]
-    fn intercepts_zen_mode_hotkey_and_tracks_active_command() {
+    fn zen_ipc_hides_the_hud_and_tracks_active_command() {
         let t0 = Instant::now();
         let cfg = Config::from_toml(
             r#"
-            zen_toggle_key = "ctrl-\\"
-
             [status_bar]
             height = 1
             left = [{ type = "active_command", min_secs = 2 }]
@@ -782,15 +720,38 @@ mod tests {
         );
         assert!(comp.rendered_text().contains("⚙ cargo"));
 
-        // 2. Toggle Zen Mode via Ctrl+\ (0x1c) -> HUD hidden and child PTY expands to 20x4!
-        let tx_zen = comp.step(Event::HostInput(b"a\x1cb"), t3);
-        assert_eq!(tx_zen.child_pty_input, b"ab");
+        // 2. Keys are never intercepted: control bytes reach the child untouched
+        let tx_keys = comp.step(Event::HostInput(b"a\x1c\x1d\x1eb"), t3);
+        assert_eq!(tx_keys.child_pty_input, b"a\x1c\x1d\x1eb");
+        assert!(!comp.is_zen_mode());
+
+        // 3. `thud zen` hides the HUD and the child PTY expands to 20x4
+        let tx_zen = comp.step(Event::Ipc(IpcMessage::Zen { enabled: None }), t3);
         assert!(comp.is_zen_mode());
         assert_eq!(
             tx_zen.child_pty_resize,
             Some(TermSize { cols: 20, rows: 4 })
         );
         assert!(!comp.rendered_text().contains("⚙ cargo"));
+
+        comp.step(
+            Event::Ipc(IpcMessage::Zen {
+                enabled: Some(true),
+            }),
+            t3,
+        );
+        assert!(comp.is_zen_mode(), "`on` is idempotent");
+        let tx_show = comp.step(
+            Event::Ipc(IpcMessage::Zen {
+                enabled: Some(false),
+            }),
+            t3,
+        );
+        assert_eq!(
+            tx_show.child_pty_resize,
+            Some(TermSize { cols: 20, rows: 3 })
+        );
+        assert!(comp.rendered_text().contains("⚙ cargo"));
     }
 
     #[test]
@@ -1005,14 +966,13 @@ mod tests {
     }
 
     #[test]
-    fn reload_key_and_reload_config_event_update_compositor_in_place() {
+    fn reload_ipc_and_reload_config_event_update_compositor_in_place() {
         let now = Instant::now();
         let cfg = Config::default();
         let (mut comp, _) = Compositor::new(TermSize { cols: 30, rows: 3 }, cfg, now).unwrap();
 
-        // Ctrl+] (0x1d) is intercepted and triggers reload_config without forwarding to child PTY
-        let tx = comp.step(Event::HostInput(b"x\x1dy"), now);
-        assert_eq!(tx.child_pty_input, b"xy");
+        // `thud reload` asks the session to reload the config source
+        let tx = comp.step(Event::Ipc(IpcMessage::ReloadConfig), now);
         assert!(tx.reload_config);
 
         // Applying Event::ReloadConfig swaps active configuration (including `position = "top"`)
@@ -1107,17 +1067,12 @@ mod tests {
         assert_eq!(tx_vim.child_pty_input, b"\x1b[<0;15;4M");
     }
 
-    fn with_mouse(mode: &str) -> Config {
-        Config::from_toml(&format!("mouse = \"{mode}\"\noverlays = []")).unwrap()
-    }
-
     #[test]
-    fn auto_mouse_mirrors_child_tracking_and_leaves_the_shell_selectable() {
+    fn host_mouse_reporting_mirrors_the_child_and_stays_off_at_the_shell() {
         let now = Instant::now();
         let (mut comp, init) =
-            Compositor::new(TermSize { cols: 60, rows: 6 }, with_mouse("auto"), now).unwrap();
+            Compositor::new(TermSize { cols: 60, rows: 6 }, sample_config(), now).unwrap();
         assert!(!init.host_ansi_diff.windows(5).any(|w| w == b"?1000"));
-        assert!(!comp.is_mouse_captured(), "shell text stays selectable");
 
         comp.step(Event::PtyOutput(b"\x1b[?1002h\x1b[?1006h"), now);
         assert!(
@@ -1125,7 +1080,6 @@ mod tests {
                 .unwrap()
                 .starts_with(b"\x1b[?1002h\x1b[?1006h")
         );
-        assert!(comp.is_mouse_captured());
 
         comp.step(Event::PtyOutput(b"\x1b[?1002l\x1b[?1006l"), now);
         assert!(
@@ -1136,58 +1090,6 @@ mod tests {
     }
 
     #[test]
-    fn mouse_toggle_key_inverts_capture_until_pressed_again() {
-        let now = Instant::now();
-        let (mut comp, _) =
-            Compositor::new(TermSize { cols: 60, rows: 6 }, with_mouse("auto"), now).unwrap();
-
-        // At the shell: capture for wheel scrollback
-        let tx = comp.step(Event::HostInput(b"\x1e"), now);
-        assert!(tx.child_pty_input.is_empty());
-        assert!(
-            comp.render(now)
-                .unwrap()
-                .starts_with(b"\x1b[?1000h\x1b[?1006h")
-        );
-        assert!(comp.rendered_text().contains("Mouse: thud (scroll)"));
-
-        // Back to the configured mode
-        comp.step(Event::HostInput(b"\x1e"), now);
-        assert!(
-            comp.render(now)
-                .unwrap()
-                .starts_with(b"\x1b[?1000l\x1b[?1006l")
-        );
-        assert!(comp.rendered_text().contains("Mouse: auto"));
-
-        // Inside a mouse app: release to the terminal for native selection
-        comp.step(Event::PtyOutput(b"\x1b[?1000h\x1b[?1006h"), now);
-        comp.render(now);
-        comp.step(Event::HostInput(b"\x1e"), now);
-        assert!(!comp.is_mouse_captured());
-        assert!(
-            comp.render(now)
-                .unwrap()
-                .starts_with(b"\x1b[?1000l\x1b[?1006l")
-        );
-        assert!(comp.rendered_text().contains("Mouse: terminal (select)"));
-    }
-
-    #[test]
-    fn always_and_off_mouse_modes() {
-        let now = Instant::now();
-        let (_, always) =
-            Compositor::new(TermSize { cols: 20, rows: 4 }, with_mouse("always"), now).unwrap();
-        assert!(always.host_ansi_diff.starts_with(b"\x1b[?1000h\x1b[?1006h"));
-
-        let (mut off, _) =
-            Compositor::new(TermSize { cols: 20, rows: 4 }, with_mouse("off"), now).unwrap();
-        off.step(Event::PtyOutput(b"\x1b[?1003h"), now);
-        assert!(!off.render(now).unwrap().windows(5).any(|w| w == b"?1003"));
-        assert!(!off.is_mouse_captured());
-    }
-
-    #[test]
     fn forwards_mouse_reports_in_the_encoding_the_child_requested() {
         let now = Instant::now();
         let (mut comp, _) = Compositor::new(
@@ -1195,7 +1097,7 @@ mod tests {
                 cols: 300,
                 rows: 10,
             },
-            with_mouse("auto"),
+            sample_config(),
             now,
         )
         .unwrap();
@@ -1209,19 +1111,6 @@ mod tests {
         comp.step(Event::PtyOutput(b"\x1b[?1005h"), now);
         let wide = comp.step(Event::HostInput(b"\x1b[<0;200;4M"), now);
         assert_eq!(wide.child_pty_input, "\x1b[M \u{e8}$".as_bytes());
-    }
-
-    #[test]
-    fn parses_mouse_settings() {
-        assert_eq!(Config::default().mouse, MouseMode::Auto);
-        assert_eq!(Config::default().mouse_toggle_key, Some(Hotkey(0x1e)));
-        let cfg = Config::from_toml("mouse = \"off\"\nmouse_toggle_key = \"\"").unwrap();
-        assert_eq!((cfg.mouse, cfg.mouse_toggle_key), (MouseMode::Off, None));
-        assert_eq!(
-            Config::from_toml(&cfg.to_annotated_toml()).unwrap().mouse,
-            MouseMode::Off
-        );
-        assert!(Config::from_toml("mouse = \"sometimes\"").is_err());
     }
 
     #[test]
@@ -1259,13 +1148,15 @@ mod tests {
         let enabled = comp.render(now).unwrap();
         assert!(enabled.starts_with(b"\x1b[?2004h\x1b[?1h\x1b="));
 
-        // Hotkey bytes inside a paste (split across reads) reach the child untouched.
-        let first = comp.step(Event::HostInput(b"\x1b[200~ab\x1c\x1d"), now);
-        let second = comp.step(Event::HostInput(b"cd\x1b[201~\x1c"), now);
-        assert_eq!(first.child_pty_input, b"\x1b[200~ab\x1c\x1d");
-        assert!(!first.reload_config);
+        // A paste (split across reads) reaches the child untouched
+        let first = comp.step(Event::HostInput(b"\x1b[200~ab\r"), now);
+        let second = comp.step(Event::HostInput(b"cd\x1b[201~"), now);
+        assert_eq!(first.child_pty_input, b"\x1b[200~ab\r");
+        assert!(
+            !first.line_submitted,
+            "a newline inside a paste is not a submitted line"
+        );
         assert_eq!(second.child_pty_input, b"cd\x1b[201~");
-        assert!(comp.is_zen_mode(), "hotkey after the paste end still works");
 
         comp.step(Event::PtyOutput(b"x"), now);
         let unchanged = comp.render(now).unwrap();
@@ -1288,22 +1179,6 @@ mod tests {
             !comp
                 .step(Event::HostInput(b"\x1b[200~a\rb\x1b[201~"), now)
                 .line_submitted
-        );
-    }
-
-    #[test]
-    fn rejects_invalid_hotkeys_when_loading_config() {
-        let err = Config::from_toml(r#"zen_toggle_key = "ctrl-1""#).unwrap_err();
-        assert!(err.to_string().contains("invalid hotkey 'ctrl-1'"), "{err}");
-
-        let disabled = Config::from_toml(r#"reload_key = """#).unwrap();
-        assert_eq!(disabled.reload_key, None);
-        assert_eq!(
-            Config::from_toml(&disabled.to_annotated_toml())
-                .unwrap()
-                .reload_key,
-            None,
-            "a disabled hotkey survives the annotated template round trip"
         );
     }
 

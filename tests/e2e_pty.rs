@@ -264,27 +264,25 @@ fn e2e_outer_pty_interactive_input_status_bar_ipc_and_clean_exit() {
         "expected git branch on bottom status bar row 23, got: {bottom_row:?}"
     );
 
-    // At the shell the outer terminal keeps its own text selection (no mouse reporting);
-    // Ctrl+^ captures the mouse for wheel scrollback and pressing it again releases it.
+    // thud never captures the mouse: the outer terminal keeps its own text selection, and
+    // mouse reporting follows what the app inside requests.
     assert_eq!(
         term.vt.screen().mouse_protocol_mode(),
         vt100::MouseProtocolMode::None
     );
-    term.send_keys(b"\x1e").unwrap();
+    term.type_command("printf '\\033[?1000h'");
     assert!(
         term.pump_until(Duration::from_secs(2), |screen| {
             screen.mouse_protocol_mode() == vt100::MouseProtocolMode::PressRelease
-                && screen.contents().contains("Mouse: thud (scroll)")
         }),
-        "mouse_toggle_key did not capture the mouse; screen:\n{}",
-        term.vt.screen().contents()
+        "child mouse mode was not mirrored to the host"
     );
-    term.send_keys(b"\x1e").unwrap();
+    term.type_command("printf '\\033[?1000l'");
     assert!(
         term.pump_until(Duration::from_secs(2), |screen| {
             screen.mouse_protocol_mode() == vt100::MouseProtocolMode::None
         }),
-        "mouse_toggle_key did not release the mouse"
+        "child mouse mode reset was not mirrored to the host"
     );
 
     // A branch switch by a command too short to be sampled still updates the status bar
@@ -315,7 +313,7 @@ fn e2e_outer_pty_interactive_input_status_bar_ipc_and_clean_exit() {
         term.vt.screen().contents()
     );
 
-    // 3. Test stacked toasts, progress bar IPC, and Zen Mode hotkey (Ctrl+\ = 0x1c)
+    // 3. Test stacked toasts, progress bar IPC, and `thud zen`
     term.type_command(&format!(
         "{bin_path} toast FIRST_TOAST --level info && {bin_path} toast SECOND_TOAST --level success && {bin_path} progress deploy 50 --label Deploying"
     ));
@@ -330,8 +328,8 @@ fn e2e_outer_pty_interactive_input_status_bar_ipc_and_clean_exit() {
         term.vt.screen().contents()
     );
 
-    // Toggle Zen Mode ON via Ctrl+\ (0x1c) -> status bar, toasts, and gauge hide
-    term.send_keys(b"\x1c").unwrap();
+    // `thud zen` -> status bar, toasts, and gauge hide
+    term.type_command(&format!("{bin_path} zen"));
     assert!(
         term.pump_until(Duration::from_secs(2), |screen| {
             let contents = screen.contents();
@@ -341,8 +339,8 @@ fn e2e_outer_pty_interactive_input_status_bar_ipc_and_clean_exit() {
         term.vt.screen().contents()
     );
 
-    // Toggle Zen Mode OFF via Ctrl+\ (0x1c) -> HUD restores
-    term.send_keys(b"\x1c").unwrap();
+    // `thud zen off` -> HUD restores
+    term.type_command(&format!("{bin_path} zen off"));
     assert!(
         term.pump_until(Duration::from_secs(2), |screen| {
             screen.contents().contains("Deploying ━━━━━─────  50%")

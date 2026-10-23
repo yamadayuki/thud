@@ -32,26 +32,30 @@ thud --shell /opt/homebrew/bin/fish --config ~/.config/thud/config.toml
   ```text
   thud error: cannot start a nested thud session inside an active thud session (use 'thud --force' to override, or 'exit' to leave)
   ```
-Other CLI subcommands (`thud set`, `thud progress`, `thud toast`, `thud reload`, `thud quit`, `thud init-config`) work normally inside the session.
+Other CLI subcommands (`thud set`, `thud progress`, `thud toast`, `thud zen`, `thud reload`, `thud quit`, `thud init-config`) work normally inside the session.
 
 ---
 
-## 2. Keyboard Shortcuts
+## 2. Keys, Mouse & Zen Mode
 
-While inside a `thud` session, three hotkeys are intercepted before reaching the child shell:
+thud is only a HUD: it never intercepts keys or the mouse. Every keystroke reaches your shell, and mouse reporting follows exactly what the app inside requests (vim, htop, …). At the shell prompt your terminal's own text selection and copy work as usual.
 
-| Default Key | Config Option | Action |
-| :--- | :--- | :--- |
-| **`Ctrl+\`** (`0x1c`) | `zen_toggle_key = "ctrl-\\"` | **Toggle Zen Mode**: Hides all HUD elements (status bar, floating overlays, and toasts) and resizes the child PTY to occupy 100% of the terminal height. Press again to restore the HUD. |
-| **`Ctrl+]`** (`0x1d`) | `reload_key = "ctrl-]"` | **Reload Configuration**: Re-reads `config.toml` from disk and applies changes immediately. |
-| **`Ctrl+^`** (`0x1e`) | `mouse_toggle_key = "ctrl-^"` | **Toggle Mouse Capture**: Inverts mouse capture until pressed again (toast: `Mouse: thud (scroll)` / `Mouse: terminal (select)` / `Mouse: auto`). Note that vim also uses `Ctrl+^` (alternate file). |
-
-Set any option to `""` in `config.toml` to disable interception and pass the control byte directly to your shell.
-
-### Selecting & Copying Text
-With the default `mouse = "auto"`, thud only captures the mouse while the app inside asks for it (vim, htop, less with mouse support, …). At the shell prompt your terminal's own selection and copy work as usual.
-- **Scroll thud's history with the wheel**: press `Ctrl+^` to capture the mouse, and press it again when done (or set `mouse = "always"`).
-- **Select text inside a mouse app**: press `Ctrl+^` to hand the mouse back to the terminal, select and copy, then press it again.
+### Zen Mode (`thud zen`)
+Hide all HUD elements (status bar, floating overlays, and toasts) and give the shell the full terminal height:
+```sh
+thud zen        # toggle
+thud zen on     # hide the HUD
+thud zen off    # show the HUD
+```
+To toggle it from a key, bind the command in your shell, for example:
+```sh
+# zsh
+thud-zen() { thud zen }; zle -N thud-zen; bindkey '^\\' thud-zen
+# fish
+bind \c\\ 'thud zen'
+# bash
+bind -x '"\C-\\": thud zen'
+```
 
 ---
 

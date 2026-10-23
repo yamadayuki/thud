@@ -3,7 +3,7 @@ type: Requirement
 title: "Core Terminal HUD & Compositor Requirements"
 description: "Terminal-emulator-agnostic and shell-agnostic HUD providing bottom status lines, floating top-right overlays, and multi-source widgets."
 tags: [terminal, pty, hud, overlay, ipc, widgets]
-generated: { by: agent/cli, at: "2026-10-22T11:00:53Z" }
+generated: { by: claude-code/claude-opus-5-5, at: "2026-10-23T05:00:23Z" }
 status: stable
 ---
 
@@ -18,7 +18,7 @@ status: stable
    - Responds to terminal capability/status queries (`DA1`, `DA2`, `DSR 5/6`, `XTVERSION`, Kitty keyboard, `OSC 10/11`) so modern shells like `fish` start without delay or warnings.
 2. **Full Virtual Terminal Compositor & Rich 2D HUD Chrome**:
    - Maintains an in-memory virtual screen buffer (both Primary Screen and Alternate Screen `?1049h`/`?1049l`).
-   - Adjusts child PTY `winsize` (`TIOCSWINSZ`) to reserve rows for docked bars (`rows - docked_rows`) and dynamically expands to full height during Zen Mode (`Ctrl+\`).
+   - Adjusts child PTY `winsize` (`TIOCSWINSZ`) to reserve rows for docked bars (`rows - docked_rows`) and dynamically expands to full height during Zen Mode (`thud zen`).
    - Supports semantic colors (named colors like `"cyan"`, `"transparent"`, hex RGB `"#89b4fa"`, 8-digit hex RGBA `"#24283b80"`, `@<opacity>` suffix like `"#24283b@0.7"`, or ANSI 256 numbers) with native terminal transparency (`Color::Default` / `"transparent"`, default for `bar_bg` in all theme presets so Ghostty/WezTerm/Kitty window opacity shines through) and in-buffer RGB alpha blending against underlying cells.
    - Supports both string theme presets (`theme = "tokyo_night"`) and customizable `[theme]` tables (`preset = "tokyo_night"` with per-field overrides for `bar_fg`, `bar_bg`, `overlay_fg`, `overlay_bg`, `border_fg`, `title_fg`, `track_fg`, and widget accents).
    - Supports per-widget `icon`, `pill` (Nerd Font `...` capsules), `padding`, `track_fg`, and multi-widget bordered `[[overlays]]` (`widgets = [...]`, `border_fg`, `title_fg`, `padding_x`).
@@ -33,6 +33,7 @@ status: stable
      - `thud set` / `thud clear` for named status slots with optional TTL.
      - `thud progress <key> <0..100|done> [--label <txt>]` feeding `sparkline` (`▁▂▃▄▅▆▇█`) and `gauge` (`━━━─── 60%`) widgets.
      - `thud toast <msg> [--level info|success|warn|error]` pushing to a configurable floating toast stack (`[toast]` with `anchor`, `margin_x = 2`, `margin_y = 1`, `gap`, `pill`, and `border`).
-   - **Live Configuration Reload & Hotkeys**:
-     - Automatic live reload when `config.toml` is modified on disk (`mtime` monitoring), plus manual reload via `reload_key` (default `Ctrl+]`) and `thud reload`. Invalid TOML edits preserve the active configuration and surface an error toast.
-     - `Ctrl+\` (`zen_toggle_key`) to toggle Zen Mode (hide/show all HUD chrome).
+   - **Live Configuration Reload & Zen Mode**:
+     - Automatic live reload when `config.toml` is modified on disk (`mtime` monitoring), plus manual reload via `thud reload`. Invalid TOML edits preserve the active configuration and surface an error toast.
+     - `thud zen [on|off]` hides or shows all HUD chrome.
+   - **Transparency (ADR-011)**: thud is only a HUD. It never intercepts keys or captures the mouse; host mouse reporting mirrors the child.

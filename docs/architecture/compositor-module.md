@@ -3,7 +3,7 @@ type: Architecture
 title: "Deep Compositor & Session Module Architecture"
 description: Two-tier deep module design pairing a deterministic Sans-I/O Compositor core with a declarative Session runner.
 tags: [architecture, codebase-design, compositor, seam, sans-io]
-generated: { by: claude-code/claude-opus-5-5, at: "2026-10-23T02:55:22Z" }
+generated: { by: claude-code/claude-opus-5-5, at: "2026-10-23T05:00:32Z" }
 status: stable
 ---
 
@@ -34,7 +34,7 @@ flowchart TB
         Painter["painter.rs: HudPainter (status bar, overlays, toast stack, widget evaluation, theme)"]
         Sched["scheduler.rs: CommandScheduler (triggers, when_files, in-flight, outputs)"]
         VTE["vt.rs: VtScreenAdapter, Terminal Query Responder & Mode Mirroring"]
-        Input["input.rs: InputRouter (mouse, scrollback, hotkeys, bracketed paste)"]
+        Input["input.rs: InputRouter (mouse, scrollback, bracketed paste; no key interception)"]
         Layout["layout.rs: PlacementSolver (Overlays & Toast Stack, Text/Cursor Dodge)"]
     end
 
@@ -89,8 +89,8 @@ flowchart TB
   - `painter.rs` (`HudPainter`, ADR-007): Paints the status bar, overlays (sorted by `z_index`), and toast stack over the projected child screen; evaluates each `WidgetSpec` into styled `Line`s and resolves theme colors, including themed toast and progress colors. A single `effective_widgets` walk (config + dynamic overlays) serves `HudPainter`, `CommandScheduler`, and `watched_markers`.
   - `scheduler.rs` (`CommandScheduler`, ADR-005): Decides when `command` widgets and metric `cmd`s are due (`interval` / `cwd` / `change` triggers, `when_files` markers reported through `BuiltinValues::found_markers`), never re-dispatches a command still in flight, keeps the previous output when a run fails, re-runs only changed specs after reload, and keys commands with the typed `CommandKey` (`Widget(id)` / `Metric(key)`). `Compositor::watched_markers` exposes the marker names to resolve.
   - `vt.rs` (`VtScreenAdapter`): Wraps `vt100::Parser` (Primary/Alternate screen), copies virtual terminal cells into `Buffer`, synthesizes replies to terminal queries (`DA1`, `DA2`, `DSR 5/6`, `XTVERSION`, Kitty keyboard, `OSC 10/11`), and exposes the child's input modes (bracketed paste, application cursor keys, application keypad). `Compositor::render` mirrors any mode change to the host ahead of the frame diff (ADR-008); the OS adapter resets them on exit.
-  - `input.rs` (`InputRouter`, ADR-008): Classifies host input into bytes for the child and HUD actions (scroll, snap back, zen toggle, reload) in arrival order. Holds an incomplete SGR/X10 mouse report until the rest arrives (a lone `ESC` / `ESC [` is forwarded immediately), forwards bracketed pastes verbatim without interpreting hotkeys, and remaps SGR mouse rows for a top status bar. Hotkeys are validated when the config is loaded (`Hotkey`).
-  - Mouse capture (ADR-009): `Compositor::is_mouse_captured` combines `config.mouse` (`auto` / `always` / `off`) with the `mouse_toggle_key` override. While captured, the host mirrors the child's tracking level (`?1000` / `?1002` / `?1003`, or `?1000` when thud captures for wheel scrollback) with SGR reports, and `InputRouter` re-encodes each report in the child's requested encoding. While released, the host reports no mouse events, so the terminal's native text selection works; the OS adapter disables alternate scroll (`?1007`) for the session.
+  - `input.rs` (`InputRouter`, ADR-008 / ADR-011): Classifies host input into bytes for the child and HUD actions (scroll, snap back, submitted line) in arrival order; it never consumes keys. Holds an incomplete SGR/X10 mouse report until the rest arrives (a lone `ESC` / `ESC [` is forwarded immediately), forwards bracketed pastes verbatim, and re-encodes forwarded mouse reports for the child (row shift for a top status bar, child's requested encoding).
+  - Mouse (ADR-009 / ADR-011): thud never captures the mouse. Host mouse reporting mirrors the child's tracking level (`?1000` / `?1002` / `?1003`) with SGR reports, so the terminal's native selection works whenever the child has not requested the mouse; the OS adapter disables alternate scroll (`?1007`) for the session. Zen mode is driven by `IpcMessage::Zen` (`thud zen [on|off]`).
   - `layout.rs` (`PlacementSolver`): Computes child PTY viewport size, resolves floating overlay bounding-box positions with cursor and non-whitespace text collision dodging (`Ignore`, `AutoHide`, `DodgeToOppositeCorner`), and places the toast stack as one box under `[toast].collision`.
 - **Decoupled Ingestion & Pacing**:
   - Byte ingestion (`Event::PtyOutput`) updates virtual screen state and sets a dirty flag immediately without triggering frame rendering.

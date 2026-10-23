@@ -6,7 +6,7 @@ pub mod ui;
 pub use compositor::{BuiltinValues, CommandKey, Compositor, DueCommand, Event, Transition};
 pub use config::{
     Anchor, BorderStyle, CellStyle, CollisionPolicy, Color, CommandTrigger, Config, ConfigError,
-    Hotkey, IpcMessage, OverlayConfig, ScreenCondition, SegmentFormat, StatusBarConfig, TermSize,
+    IpcMessage, OverlayConfig, ScreenCondition, SegmentFormat, StatusBarConfig, TermSize,
     ThemeConfig, ThemePalette, ThemePreset, ToastConfig, ToastLevel, WidgetKind, WidgetSpec,
 };
 pub use session::{Session, SessionError};

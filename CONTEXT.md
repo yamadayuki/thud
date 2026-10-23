@@ -41,7 +41,7 @@ The internal module inside `Compositor` that paints the HUD (status bar, floatin
 _Avoid_: Renderer, HudLayer, Scene
 
 **InputRouter**:
-The internal module inside `Compositor` that decides what each piece of host input means: bytes for the child, scrollback movement, a HUD hotkey, or an opaque bracketed paste, holding incomplete mouse reports until they complete.
+The internal module inside `Compositor` that decides what each piece of host input means: bytes for the child, scrollback movement, or an opaque bracketed paste, holding incomplete mouse reports until they complete.
 _Avoid_: KeyHandler, InputParser, HostInputDecoder
 
 **VtScreenAdapter**:

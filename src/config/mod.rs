@@ -57,30 +57,6 @@ pub enum ScreenCondition {
     AlternateOnly,
 }
 
-/// When thud captures host mouse reporting (which disables the terminal's own text selection).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum MouseMode {
-    /// Only while the child requests mouse tracking (e.g. vim, htop); text is selectable at
-    /// the shell.
-    #[default]
-    Auto,
-    /// Always; the wheel scrolls thud's scrollback at the shell.
-    Always,
-    /// Never; mouse apps inside thud receive no mouse input.
-    Off,
-}
-
-impl std::fmt::Display for MouseMode {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self {
-            MouseMode::Auto => "auto",
-            MouseMode::Always => "always",
-            MouseMode::Off => "off",
-        })
-    }
-}
-
 /// Execution trigger policy for `type = "command"` widgets.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -423,25 +399,6 @@ pub struct Config {
     pub shell: Option<String>,
     #[serde(default)]
     pub ipc_socket: Option<PathBuf>,
-    /// `None` (written as `""`) disables the hotkey.
-    #[serde(
-        default = "default_zen_toggle_key",
-        deserialize_with = "deserialize_optional_hotkey"
-    )]
-    pub zen_toggle_key: Option<Hotkey>,
-    #[serde(
-        default = "default_reload_key",
-        deserialize_with = "deserialize_optional_hotkey"
-    )]
-    pub reload_key: Option<Hotkey>,
-    #[serde(default)]
-    pub mouse: MouseMode,
-    /// Temporarily inverts mouse capture; pressing it again returns to `mouse`.
-    #[serde(
-        default = "default_mouse_toggle_key",
-        deserialize_with = "deserialize_optional_hotkey"
-    )]
-    pub mouse_toggle_key: Option<Hotkey>,
     #[serde(default = "default_scrollback_lines")]
     pub scrollback_lines: usize,
     #[serde(default)]
@@ -456,85 +413,6 @@ pub struct Config {
 
 fn default_theme() -> ThemeConfig {
     ThemeConfig::from_preset(ThemePreset::TokyoNight)
-}
-
-fn default_zen_toggle_key() -> Option<Hotkey> {
-    Some(Hotkey(0x1c))
-}
-
-fn default_reload_key() -> Option<Hotkey> {
-    Some(Hotkey(0x1d))
-}
-
-fn default_mouse_toggle_key() -> Option<Hotkey> {
-    Some(Hotkey(0x1e))
-}
-
-/// A HUD hotkey: a single control byte written as `"ctrl-<key>"` in the config
-/// (`ctrl-a`..`ctrl-z`, `ctrl-\`, `ctrl-]`, `ctrl-^`, `ctrl-_`, `ctrl-space`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Hotkey(pub u8);
-
-impl Hotkey {
-    pub fn parse(spec: &str) -> Result<Self, String> {
-        let s = spec.trim().to_ascii_lowercase();
-        let byte = match s.strip_prefix("ctrl-") {
-            Some("\\") => Some(0x1c),
-            Some("]") => Some(0x1d),
-            Some("^") => Some(0x1e),
-            Some("_") => Some(0x1f),
-            Some("space" | "@") => Some(0x00),
-            Some(c) if c.len() == 1 && c.as_bytes()[0].is_ascii_lowercase() => {
-                Some(c.as_bytes()[0] - b'a' + 1)
-            }
-            _ => None,
-        };
-        byte.map(Hotkey).ok_or_else(|| {
-            format!(
-                "invalid hotkey '{spec}' (expected ctrl-a..ctrl-z, ctrl-\\, ctrl-], ctrl-^, ctrl-_, or ctrl-space)"
-            )
-        })
-    }
-}
-
-impl std::fmt::Display for Hotkey {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self.0 {
-            0x00 => write!(f, "ctrl-space"),
-            0x1c => write!(f, "ctrl-\\"),
-            0x1d => write!(f, "ctrl-]"),
-            0x1e => write!(f, "ctrl-^"),
-            0x1f => write!(f, "ctrl-_"),
-            b @ 1..=26 => write!(f, "ctrl-{}", char::from(b'a' + b - 1)),
-            b => write!(f, "0x{b:02x}"),
-        }
-    }
-}
-
-/// Accepts `""` as a disabled hotkey and rejects any other unknown key name.
-fn deserialize_optional_hotkey<'de, D: serde::Deserializer<'de>>(
-    deserializer: D,
-) -> Result<Option<Hotkey>, D::Error> {
-    let spec = String::deserialize(deserializer)?;
-    if spec.trim().is_empty() {
-        return Ok(None);
-    }
-    Hotkey::parse(&spec)
-        .map(Some)
-        .map_err(serde::de::Error::custom)
-}
-
-impl Serialize for Hotkey {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.collect_str(self)
-    }
-}
-
-impl<'de> Deserialize<'de> for Hotkey {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let spec = String::deserialize(deserializer)?;
-        Hotkey::parse(&spec).map_err(serde::de::Error::custom)
-    }
 }
 
 fn default_scrollback_lines() -> usize {
@@ -574,10 +452,6 @@ impl Default for Config {
             theme: default_theme(),
             shell: None,
             ipc_socket: None,
-            zen_toggle_key: default_zen_toggle_key(),
-            reload_key: default_reload_key(),
-            mouse: MouseMode::default(),
-            mouse_toggle_key: default_mouse_toggle_key(),
             scrollback_lines: default_scrollback_lines(),
             status_bar: StatusBarConfig::default(),
             toast: ToastConfig::default(),
@@ -711,7 +585,6 @@ mod tests {
         let toml_input = r##"
             theme = "tokyo_night"
             shell = "/bin/zsh"
-            zen_toggle_key = "ctrl-g"
 
             [status_bar]
             enabled = true
@@ -748,7 +621,6 @@ mod tests {
         let cfg = Config::from_toml(toml_input).expect("valid TOML");
         assert_eq!(cfg.theme, ThemeConfig::from_preset(ThemePreset::TokyoNight));
         assert_eq!(cfg.shell.as_deref(), Some("/bin/zsh"));
-        assert_eq!(cfg.zen_toggle_key, Some(Hotkey(0x07)));
         assert_eq!(cfg.status_bar.left.len(), 3);
         assert_eq!(
             cfg.status_bar.left[0].style.bg,
